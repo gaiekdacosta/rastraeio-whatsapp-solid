@@ -39,6 +39,7 @@
   --good-text: #006300;
   --critical-text: #a52a2a;
 
+  --brand: #1f2bff;
   --accent: var(--series-1);
   --accent-ink: #ffffff;
   --bubble-in: #ffffff;
@@ -73,6 +74,7 @@
   --good-text: #0ca30c;
   --critical-text: #e66767;
   --bubble-in: #242423;
+  --brand: #4a55ff;
   --bubble-out: #1e2f47;
   --shadow: none;
 }
@@ -141,25 +143,35 @@ a {
 }
 .brand {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 10px;
   margin-right: auto;
 }
-.brand-mark {
-  width: 32px;
-  height: 32px;
-  border-radius: 9px;
-  background: var(--accent);
-  color: var(--accent-ink);
-  display: grid;
-  place-items: center;
+.solid-mark {
+  flex: none;
+  color: var(--brand);
 }
-.brand h1 {
-  font-size: 15px;
+.brand-wordmark {
+  display: flex;
+  flex-direction: column;
+  line-height: 1;
+}
+.brand-name {
+  font-size: 19px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.brand-tagline {
+  margin-top: 2px;
+  font-size: 8.5px;
   font-weight: 600;
-  letter-spacing: -0.01em;
+  letter-spacing: 0.26em;
+  text-transform: uppercase;
+  color: var(--ink-2);
 }
 .brand p {
+  margin-top: 4px;
   font-size: 12px;
   color: var(--muted);
 }

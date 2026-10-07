@@ -313,7 +313,7 @@ function NewUserCard({ columns, onCreated }: { columns: Column[]; onCreated: () 
   const copy = async () => {
     if (!created) return
     try {
-      await navigator.clipboard.writeText(`Acesso ao Rastreio WhatsApp\nE-mail: ${created.email}\nSenha: ${created.senha}\n${window.location.origin}${window.location.pathname}`)
+      await navigator.clipboard.writeText(`Acesso ao Rastreio WhatsApp · Solid Marketing Digital\nE-mail: ${created.email}\nSenha: ${created.senha}\n${window.location.origin}${window.location.pathname}`)
       setCopied(true)
     } catch {
       /* sem permissão de área de transferência: os dados continuam visíveis para copiar à mão */

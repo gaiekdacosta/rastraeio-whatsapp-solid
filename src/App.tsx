@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Database, LayoutDashboard, Lightbulb, Lock, MessageSquareText, MessagesSquare, UsersRound } from 'lucide-react'
+import { Database, LayoutDashboard, Lightbulb, Lock, MessagesSquare, UsersRound } from 'lucide-react'
 import type { ConvMeta, Dataset, Filters } from './lib/types'
 import { parseCsv } from './lib/parse'
 import type { ParseResult } from './lib/parse'
@@ -14,6 +14,7 @@ import { useLineNames } from './lineNames'
 import { useSession } from './auth/AuthProvider'
 import { ThemeToggle } from './components/ThemeToggle'
 import { UserMenu } from './components/UserMenu'
+import { BrandLogo } from './components/BrandLogo'
 import { DEFAULT_FILTERS, FilterBar } from './components/FilterBar'
 import { OverviewView } from './views/OverviewView'
 import { ConversationsView } from './views/ConversationsView'
@@ -246,15 +247,7 @@ export default function App() {
     <div className="app">
       <header className="topbar">
         <div className="topbar-inner">
-          <div className="brand">
-            <div className="brand-mark" aria-hidden>
-              <MessageSquareText size={18} />
-            </div>
-            <div>
-              <h1>Rastreio WhatsApp</h1>
-              <p>Império 085 · leads e atendimento</p>
-            </div>
-          </div>
+          <BrandLogo />
           <nav className="tabs" role="tablist" aria-label="Seções">
             {tabs.map((t) => {
               const Icon = t.icon
