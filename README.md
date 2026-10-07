@@ -1,4 +1,4 @@
-# Rastreio WhatsApp · Dashboard
+# Solid Marketing Digital · Rastreio WhatsApp
 
 Dashboard em React para analisar e gerenciar as conversas de WhatsApp exportadas na planilha
 **“[Império 085] Rastreio WhatsApp – Conversas WhatsApp”**. Todas as conversas vêm de uma planilha só; o acesso

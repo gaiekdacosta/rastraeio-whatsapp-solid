@@ -1,9 +1,10 @@
 import { useState } from 'react'
 import type { FormEvent, ReactNode } from 'react'
-import { LogIn, MessageSquareText } from 'lucide-react'
+import { LogIn } from 'lucide-react'
 import { useAuth } from '../auth/AuthProvider'
 import { DEMO_ACCOUNTS } from '../auth/demoBackend'
 import { PAPEL_LABEL } from '../auth/types'
+import { BrandLogo } from '../components/BrandLogo'
 import { PasswordField } from '../components/PasswordField'
 import { ThemeToggle } from '../components/ThemeToggle'
 
@@ -79,15 +80,7 @@ export function AuthLayout({ children }: { children: ReactNode }) {
         <ThemeToggle />
       </div>
       <main className="auth-card card">
-        <div className="brand auth-brand">
-          <div className="brand-mark" aria-hidden>
-            <MessageSquareText size={18} />
-          </div>
-          <div>
-            <h1>Rastreio WhatsApp</h1>
-            <p>Império 085 · leads e atendimento</p>
-          </div>
-        </div>
+        <BrandLogo className="auth-brand" />
         {children}
       </main>
     </div>
