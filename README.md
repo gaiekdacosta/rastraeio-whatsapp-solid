@@ -1,0 +1,154 @@
+# Rastreio WhatsApp · Dashboard
+
+Dashboard em React para analisar e gerenciar as conversas de WhatsApp exportadas na planilha
+**“[Império 085] Rastreio WhatsApp – Conversas WhatsApp”**. Todas as conversas vêm de uma planilha só; o acesso
+é por login (Supabase) e cada usuário vê apenas as conversas dos **números da empresa** que o administrador liberou para ele.
+
+## Rodar
+
+```bash
+npm install
+npm run dev        # http://localhost:5173
+npm run build      # gera dist/ (site estático, pode ser hospedado em qualquer lugar)
+npm run preview    # serve o build em http://localhost:4173
+```
+
+Sem `.env`, o `npm run dev` abre em **modo demonstração**: login de mentira guardado no navegador
+(`admin@demo.local` / `admin1234` e `usuario@demo.local` / `usuario1234`) e a planilha lida do primeiro `.csv` de `data/`.
+Serve para ver as telas antes de configurar o Supabase. O modo demonstração não existe no build: sem as variáveis do
+Supabase, o site publicado mostra como configurar em vez de abrir.
+
+## Login, perfis e números liberados
+
+| Perfil | O que vê e faz |
+|---|---|
+| **Administrador** | Todas as conversas. Aba **Usuários**: cria contas (e-mail + senha), define o perfil, redefine senha, exclui e marca os números que cada usuário vê. Aba **Dados**: publica a planilha. |
+| **Usuário** | Só as conversas dos números marcados para ele, em todas as abas, totais e exportações. Pode trocar a própria senha. |
+
+Os números da aba Usuários são os **números da empresa encontrados no CSV** (coluna `Telefone` das mensagens *Enviadas*),
+com os atendentes e o total de conversas de cada um. Há também a coluna **Sem número**: leads que nunca receberam
+resposta, que a planilha não liga a nenhum número. Só os vê quem tem essa coluna marcada.
+A conversa pertence ao número que mais respondeu nela, o mesmo critério do filtro “Número da empresa”.
+
+Mudanças de números valem no próximo acesso da pessoa (ou quando ela recarrega a página).
+
+### Como o acesso é garantido
+
+A planilha não fica mais em `public/`, porque tudo ali vai para o build e poderia ser baixado sem login. Ao publicar,
+o navegador do administrador divide o CSV e envia para o bucket **privado** `conversas` do Supabase Storage:
+
+```
+<versao>/completa.csv              planilha inteira: só administradores leem
+<versao>/numeros/<numero>.csv      conversas atribuídas a cada número da empresa
+<versao>/numeros/sem-numero.csv    leads sem resposta
+```
+
+As políticas de RLS do Storage só entregam a um usuário os arquivos dos números liberados para ele em
+`numeros_usuario`. O filtro não acontece no navegador: os outros arquivos nem chegam até ele. Cada publicação vai
+para uma pasta nova; os usuários passam para ela de uma vez (linha única de `base_conversas`) e as versões antigas
+são apagadas.
+
+## Configurar o Supabase
+
+1. **Crie o projeto** em [supabase.com](https://supabase.com).
+2. **Rode a migration** `supabase/migrations/20261007120000_acesso_por_numero.sql`: cole no **SQL Editor** ou use a CLI
+   (`npx supabase login`, `npx supabase link --project-ref <ref>`, `npx supabase db push`). Ela cria as tabelas
+   `perfis`, `numeros_usuario` e `base_conversas`, as políticas de RLS, o bucket privado `conversas` e as travas
+   (perfil criado automaticamente para toda conta nova; ninguém rebaixa nem exclui o último administrador).
+3. **Publique a Edge Function** `admin-usuarios`, que cria contas, redefine senhas e exclui usuários com a chave de serviço,
+   que nunca vai para o navegador:
+   ```bash
+   npx supabase functions deploy admin-usuarios
+   ```
+   O `supabase/config.toml` já desliga o *Verify JWT* do gateway para ela, porque a função confere o token e o perfil de
+   admin por conta própria (e assim funciona com as chaves novas `sb_publishable_`). Se publicar pelo painel, desligue
+   **Verify JWT** na função.
+4. **Feche o cadastro aberto**: *Authentication → Sign In / Providers* → desligue **Allow new users to sign up**.
+   Deixe o provedor **Email** ligado: desligá-lo desliga também o login por e-mail.
+5. **Crie o primeiro administrador**: *Authentication → Users → Add user → Create new user* (marque *Auto Confirm User*)
+   e rode no SQL Editor:
+   ```sql
+   update public.perfis set papel = 'admin' where email = 'voce@empresa.com.br';
+   ```
+6. **Configure o site**: copie `.env.example` para `.env` e preencha com *Project Settings → API*:
+   ```
+   VITE_SUPABASE_URL=https://<ref>.supabase.co
+   VITE_SUPABASE_PUBLISHABLE_KEY=sb_publishable_...   # ou VITE_SUPABASE_ANON_KEY em projetos antigos
+   ```
+   Nunca coloque a *secret* / *service_role* key no `.env` do site: tudo que começa com `VITE_` vai para o navegador.
+7. Rode `npm run build`, publique o `dist/`, entre como administrador, publique o CSV em **Dados** e libere os números
+   em **Usuários**.
+
+### Supabase local (opcional)
+
+Com Docker, `npx supabase start` sobe um Supabase local com a migration e a função já aplicadas. As portas são 553xx
+(API em `http://127.0.0.1:55321`) para não colidir com outro projeto local nas portas padrão. Use a URL e a
+*Publishable key* que o `npx supabase status` mostrar num `.env.local`, crie o admin pelo Studio (`http://127.0.0.1:55323`)
+e promova com o SQL do passo 5.
+
+## O que tem
+
+| Aba | Conteúdo |
+|---|---|
+| **Visão geral** | KPIs do período (conversas, novos leads, mensagens, mediana da 1ª resposta, leads aguardando resposta, sem status), mensagens por dia, novos leads por semana, procedimentos de interesse, estágio inferido, status manual e lista de leads aguardando resposta. |
+| **Conversas** | Lista pesquisável (nome, telefone, texto) com ordenação e filtros rápidos; detalhe em formato de chat; **status manual, data de follow-up e notas** por conversa; link “Abrir no WhatsApp”. |
+| **Insights** | Destaques automáticos, funil inferido, distribuição do tempo de 1ª resposta, mapa de calor dia × hora, perfil horário, pedidos mais comuns (valor, agendamento, endereço), taxa de agendamento por procedimento, canal de origem, leads aguardando resposta e leads esfriando. |
+| **Dados** | Informações da base, publicação de nova planilha (admin) ou números liberados (usuário), exportação (CSV original com `status_manual` preenchido e resumo por lead), limpeza das classificações e explicação dos cálculos. |
+| **Usuários** (admin) | Matriz usuários × números da planilha, perfil de cada um, novo usuário com senha gerada, edição de nome/senha e exclusão. |
+
+Os filtros de período, procedimento, status, canal e número da empresa ficam numa única barra e valem para todas as abas.
+
+**Bases com mais de um número**: quando o CSV (ou o recorte liberado para o usuário) tem mais de um número da empresa, aparece o filtro
+**Número da empresa** no topo, com dois visuais (cartões com contagem e participação de cada número, ou uma linha
+compacta de botões; o ícone à direita alterna). Em **Renomear** dá para dar um nome a cada número (ex.: “Loja Centro”),
+que passa a aparecer em todo o dashboard e no export por lead; nomes e visual ficam salvos no navegador. Também aparecem a tabela **Atendimento por número** na Visão geral (clique numa linha para filtrar), o número em cada conversa
+da lista e, no chat, o atendente e o número de cada mensagem enviada. Com um número só, nada disso aparece.
+Todo gráfico tem um botão **Tabela** com os mesmos números.
+
+## Como as classificações são guardadas
+
+Status, follow-up e notas são salvos no `localStorage` do navegador, indexados pelo telefone do lead. Ou seja,
+continuam locais a cada computador, não são compartilhados entre usuários, e continuam valendo quando uma
+exportação mais recente é publicada. Se a planilha já vier com a coluna `status_manual` preenchida com um dos rótulos do app (Novo, Em atendimento, Aguardando lead,
+Agendado, Convertido, Perdido, Não é lead), esse valor é usado como ponto de partida.
+
+Para levar a classificação de volta à planilha: **Dados → Exportar → Mensagens com status_manual preenchido**.
+
+## Heurísticas (resumo)
+
+- **Conversa**: mensagens *Recebidas* agrupam pelo `Telefone`; *Enviadas* agrupam pelo `Respondendo para`.
+  IDs longos (grupos) são marcados como grupo e ficam fora das métricas de leads.
+- **Número da empresa**: o `Telefone` das linhas *Enviadas*. A conversa conta para o número que mais respondeu nela.
+  As *Recebidas* não dizem para qual número foram, então leads sem nenhuma resposta ficam como “não identificado”
+  quando há mais de um número. Conversas entre dois números da empresa são marcadas como internas e ficam fora das métricas.
+- **Procedimento**: mensagem padrão do anúncio (“Olá, tenho interesse no …!”) → palavras-chave do lead →
+  palavras-chave nas respostas da clínica → “Não identificado”.
+- **Canal**: Anúncio (CTA), Instagram, Prospecção ativa (clínica iniciou) ou Orgânico / outro.
+- **Estágio inferido**: pagamento › agendamento sinalizado › pediu agendamento › em conversa › contato inicial,
+  além de “sem resposta da clínica” e “prospecção sem retorno”.
+- **Tempo de resposta**: da primeira mensagem do lead sem resposta até a próxima mensagem da clínica.
+- **Espera / silêncio**: calculados em relação à última mensagem da planilha inteira (não ao relógio atual), a mesma
+  referência para todos os usuários.
+
+## Stack
+
+Vite + React 18 + TypeScript, Recharts, PapaParse, lucide-react, Supabase (Auth, Postgres com RLS, Storage e uma Edge Function).
+Paleta e regras de visualização seguem a skill `dataviz` (cores validadas para daltonismo nos modos claro e escuro).
+
+## Estrutura
+
+```
+src/
+  auth/       types.ts (contrato do backend), supabaseBackend.ts, demoBackend.ts (só dev), backend.ts (escolhe), AuthProvider.tsx
+  lib/        parse.ts (CSV), access.ts (divisão por número), analytics.ts (conversas, funil, métricas), export.ts, storage.ts, status.ts
+  components/ FilterBar, LineFilter (filtro/renomear números), UserMenu, PasswordField, Modal, ThemeToggle, StatTile, ChartCard, StatusBadge, charts/
+  views/      LoginView, OverviewView, ConversationsView, InsightsView, DataView, UsersView
+  AuthGate.tsx   login / erro de acesso / dashboard
+  theme.tsx      tema claro/escuro + paleta para os gráficos
+  lineNames.tsx  nomes dados aos números da empresa
+supabase/
+  migrations/    tabelas, RLS, bucket e travas
+  functions/admin-usuarios/   criar conta, redefinir senha, excluir conta (só admin)
+  config.toml    Supabase local (portas 553xx, cadastro aberto desligado)
+data/            planilha original do Império 085 (usada pelo modo demonstração)
+```
