@@ -1,5 +1,5 @@
 import { createClient, FunctionsHttpError } from '@supabase/supabase-js'
-import type { AppUser, Backend, BasePublicada, NovoUsuario, Papel, Publicacao } from './types'
+import type { AppUser, Backend, BasePublicada, NovoUsuario, Papel, PerfilPatch, Publicacao } from './types'
 import { joinCsv } from '../lib/access'
 
 const BUCKET = 'conversas'
@@ -10,6 +10,20 @@ interface PerfilRow {
   email: string
   nome: string
   papel: Papel
+  empresa: string
+  insights: string[] | null
+  visao_geral: string[] | null
+}
+
+const PERFIL_COLS = 'id, email, nome, papel, empresa, insights, visao_geral'
+
+/** Linha de perfis → campos do AppUser (sem os números, que vêm de outra tabela). */
+const fromRow = ({ visao_geral, ...p }: PerfilRow): Omit<AppUser, 'numeros'> => ({ ...p, visaoGeral: visao_geral })
+
+/** Patch do app → colunas de perfis. */
+function toRow(patch: PerfilPatch): Record<string, unknown> {
+  const { visaoGeral, ...rest } = patch
+  return visaoGeral === undefined ? rest : { ...rest, visao_geral: visaoGeral }
 }
 
 const OFFLINE = 'Não foi possível falar com o servidor. Verifique a internet e tente de novo.'
@@ -26,6 +40,11 @@ function loginError(e: { code?: string; message: string; name?: string }): Error
 function dbError(e: { message: string }): Error {
   if (/fetch/i.test(e.message)) return new Error(OFFLINE)
   if (/row-level security|permission denied/i.test(e.message)) return new Error('Sem permissão para esta ação.')
+  // Site novo com banco antigo: avisa qual migration falta em vez de "column ... does not exist".
+  if (/column .*(empresa|insights).* does not exist/i.test(e.message))
+    return new Error('O banco ainda não tem os campos de empresa e insights. Rode a migration 20261010120000_empresa_e_insights.sql no Supabase.')
+  if (/column .*visao_geral.* does not exist/i.test(e.message))
+    return new Error('O banco ainda não tem o campo da Visão geral por usuário. Rode a migration 20261010160000_visao_geral_por_usuario.sql no Supabase.')
   return new Error(e.message)
 }
 
@@ -80,13 +99,13 @@ export function createSupabaseBackend(url: string, key: string): Backend {
       if (!session) return null
       const id = session.user.id
       const [perfil, numeros] = await Promise.all([
-        sb.from('perfis').select('id, email, nome, papel').eq('id', id).maybeSingle<PerfilRow>(),
+        sb.from('perfis').select(PERFIL_COLS).eq('id', id).maybeSingle<PerfilRow>(),
         sb.from('numeros_usuario').select('numero').eq('usuario_id', id),
       ])
       if (perfil.error) throw dbError(perfil.error)
       if (numeros.error) throw dbError(numeros.error)
       if (!perfil.data) throw new Error('Sua conta existe, mas não tem perfil de acesso. Peça ao administrador para recriá-la.')
-      return { ...perfil.data, numeros: numeros.data.map((r) => r.numero as string) }
+      return { ...fromRow(perfil.data), numeros: numeros.data.map((r) => r.numero as string) }
     },
 
     onAuthChange(cb) {
@@ -116,22 +135,23 @@ export function createSupabaseBackend(url: string, key: string): Backend {
 
     async listUsers() {
       const [perfis, numeros] = await Promise.all([
-        sb.from('perfis').select('id, email, nome, papel').order('nome').returns<PerfilRow[]>(),
+        sb.from('perfis').select(PERFIL_COLS).order('nome').returns<PerfilRow[]>(),
         sb.from('numeros_usuario').select('usuario_id, numero'),
       ])
       if (perfis.error) throw dbError(perfis.error)
       if (numeros.error) throw dbError(numeros.error)
       const byUser = new Map<string, string[]>()
       for (const r of numeros.data) byUser.set(r.usuario_id, [...(byUser.get(r.usuario_id) ?? []), r.numero])
-      return perfis.data.map((p): AppUser => ({ ...p, numeros: byUser.get(p.id) ?? [] }))
+      return perfis.data.map((p): AppUser => ({ ...fromRow(p), numeros: byUser.get(p.id) ?? [] }))
     },
 
     async createUser(u: NovoUsuario) {
-      await callAdmin({ acao: 'criar', ...u })
+      const { visaoGeral, ...rest } = u
+      await callAdmin({ acao: 'criar', ...rest, visao_geral: visaoGeral })
     },
 
     async updateUser(id, patch) {
-      const { data, error } = await sb.from('perfis').update(patch).eq('id', id).select('id')
+      const { data, error } = await sb.from('perfis').update(toRow(patch)).eq('id', id).select('id')
       if (error) throw dbError(error)
       if (!data.length) throw new Error('Sem permissão para alterar este usuário.')
     },

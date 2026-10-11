@@ -19,6 +19,7 @@ import {
 } from '../lib/analytics'
 import { WEEKDAYS_LONG, fmtHours, fmtInt, fmtMinutes, fmtPct } from '../lib/format'
 import { STAGE_LABEL } from '../lib/status'
+import type { InsightId } from '../lib/insights'
 import { StatTile } from '../components/StatTile'
 import { ChartCard } from '../components/ChartCard'
 import { Legend } from '../components/ChartTooltip'
@@ -34,10 +35,13 @@ interface Props {
   msgs: Message[]
   meta: MetaMap
   palette: Palette
+  /** Blocos que esta pessoa vê (o administrador escolhe por usuário na aba Usuários). */
+  visible: Set<InsightId>
   onOpenConv: (key: string) => void
 }
 
-export function InsightsView({ convs, msgs, meta, palette, onOpenConv }: Props) {
+export function InsightsView({ convs, msgs, meta, palette, visible, onOpenConv }: Props) {
+  const show = (id: InsightId) => visible.has(id)
   const leads = useMemo(() => leadConversations(convs, meta), [convs, meta])
   const wrote = leads.filter((c) => c.received > 0)
   const replied = wrote.filter((c) => c.sent > 0)
@@ -90,7 +94,7 @@ export function InsightsView({ convs, msgs, meta, palette, onOpenConv }: Props) 
 
   return (
     <>
-      {highlights.length > 0 && (
+      {show('destaques') && highlights.length > 0 && (
         <div className="callout">
           <b>Destaques do período</b>
           <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
@@ -101,133 +105,153 @@ export function InsightsView({ convs, msgs, meta, palette, onOpenConv }: Props) 
         </div>
       )}
 
-      <div className="grid grid-kpi">
-        <StatTile icon={<Reply size={14} />} label="Taxa de resposta da clínica" value={fmtPct(responseRate)} hint={`${fmtInt(wrote.length - replied.length)} leads nunca receberam resposta`} tone={wrote.length - replied.length > 0 ? 'bad' : 'good'} />
-        <StatTile icon={<Timer size={14} />} label="Mediana da 1ª resposta" value={fmtMinutes(median(firstTimes))} hint={Number.isFinite(within15) ? `${fmtPct(within15)} em até 15 min` : '—'} tone={within15 >= 0.5 ? 'good' : undefined} />
-        <StatTile icon={<MessageCircleReply size={14} />} label="Leads que engajaram" value={fmtPct(wrote.length ? (steps[2]?.count ?? 0) / wrote.length : NaN)} hint="voltaram a escrever após a resposta" />
-        <StatTile icon={<CalendarCheck size={14} />} label="Pediram agendamento" value={fmtPct(askedScheduleShare)} hint={`${fmtInt(wrote.filter((c) => c.askedSchedule).length)} leads`} />
-        <StatTile icon={<BadgeDollarSign size={14} />} label="Perguntaram valor" value={fmtPct(askedPriceShare)} hint={`${fmtInt(wrote.filter((c) => c.askedPrice).length)} leads`} />
-        <StatTile icon={<Wallet size={14} />} label="Agendamento ou pagamento" value={fmtInt(scheduledOrPaid)} hint={`${fmtInt(paid)} com pagamento sinalizado`} tone={paid ? 'good' : undefined} />
-      </div>
+      {show('indicadores') && (
+        <div className="grid grid-kpi">
+          <StatTile icon={<Reply size={14} />} label="Taxa de resposta da clínica" value={fmtPct(responseRate)} hint={`${fmtInt(wrote.length - replied.length)} leads nunca receberam resposta`} tone={wrote.length - replied.length > 0 ? 'bad' : 'good'} />
+          <StatTile icon={<Timer size={14} />} label="Mediana da 1ª resposta" value={fmtMinutes(median(firstTimes))} hint={Number.isFinite(within15) ? `${fmtPct(within15)} em até 15 min` : '—'} tone={within15 >= 0.5 ? 'good' : undefined} />
+          <StatTile icon={<MessageCircleReply size={14} />} label="Leads que engajaram" value={fmtPct(wrote.length ? (steps[2]?.count ?? 0) / wrote.length : NaN)} hint="voltaram a escrever após a resposta" />
+          <StatTile icon={<CalendarCheck size={14} />} label="Pediram agendamento" value={fmtPct(askedScheduleShare)} hint={`${fmtInt(wrote.filter((c) => c.askedSchedule).length)} leads`} />
+          <StatTile icon={<BadgeDollarSign size={14} />} label="Perguntaram valor" value={fmtPct(askedPriceShare)} hint={`${fmtInt(wrote.filter((c) => c.askedPrice).length)} leads`} />
+          <StatTile icon={<Wallet size={14} />} label="Agendamento ou pagamento" value={fmtInt(scheduledOrPaid)} hint={`${fmtInt(paid)} com pagamento sinalizado`} tone={paid ? 'good' : undefined} />
+        </div>
+      )}
 
-      <div className="grid grid-2">
-        <ChartCard
-          title="Funil inferido das conversas"
-          subtitle="Etapas detectadas pelo conteúdo das mensagens; o status manual não altera este funil"
-          rows={steps}
-          columns={[
-            { key: 'label', label: 'Etapa' },
-            { key: 'count', label: 'Leads', numeric: true },
-            { key: 'hint', label: 'Critério' },
-          ]}
-        >
-          <FunnelBars steps={steps} palette={palette} />
-        </ChartCard>
-
-        <ChartCard
-          title="Tempo até a primeira resposta"
-          subtitle="Distribuição do intervalo entre a 1ª mensagem do lead e a 1ª resposta da clínica"
-          rows={buckets}
-          columns={[
-            { key: 'label', label: 'Faixa' },
-            { key: 'count', label: 'Conversas', numeric: true },
-          ]}
-        >
-          <ColumnBars data={buckets} xKey="label" yKey="count" label="Conversas" palette={palette} directLabels height={260} />
-        </ChartCard>
-
-        <div className="span-2">
+      <div className="grid grid-2 blocks-grid">
+        {show('funil') && (
           <ChartCard
-            title="Quando os leads escrevem"
-            subtitle="Mensagens recebidas por dia da semana e hora do dia"
-            rows={dayTotals}
+            title="Funil inferido das conversas"
+            subtitle="Etapas detectadas pelo conteúdo das mensagens; o status manual não altera este funil"
+            rows={steps}
             columns={[
-              { key: 'name', label: 'Dia' },
-              { key: 'value', label: 'Recebidas', numeric: true },
-              { key: 'peak', label: 'Hora de pico', format: (v) => `${String(v)}h` },
+              { key: 'label', label: 'Etapa' },
+              { key: 'count', label: 'Leads', numeric: true },
+              { key: 'hint', label: 'Critério' },
             ]}
           >
-            <HourHeatmap grid={heat} palette={palette} />
+            <FunnelBars steps={steps} palette={palette} />
           </ChartCard>
-        </div>
+        )}
 
-        <ChartCard
-          title="Perfil horário das mensagens"
-          subtitle="Total por hora do dia no período"
-          rows={hours}
-          columns={[
-            { key: 'label', label: 'Hora' },
-            { key: 'recebidas', label: 'Recebidas', numeric: true },
-            { key: 'enviadas', label: 'Enviadas', numeric: true },
-          ]}
-          legend={<Legend items={hourSeries} />}
-        >
-          <TwoSeriesLine data={hours} xKey="label" series={hourSeries} palette={palette} height={240} />
-        </ChartCard>
+        {show('tempo-resposta') && (
+          <ChartCard
+            title="Tempo até a primeira resposta"
+            subtitle="Distribuição do intervalo entre a 1ª mensagem do lead e a 1ª resposta da clínica"
+            rows={buckets}
+            columns={[
+              { key: 'label', label: 'Faixa' },
+              { key: 'count', label: 'Conversas', numeric: true },
+            ]}
+          >
+            <ColumnBars data={buckets} xKey="label" yKey="count" label="Conversas" palette={palette} directLabels height={260} />
+          </ChartCard>
+        )}
 
-        <ChartCard
-          title="O que os leads pedem"
-          subtitle="Leads que escreveram, por tipo de pedido detectado nas mensagens"
-          rows={asked}
-          columns={[
-            { key: 'name', label: 'Pedido' },
-            { key: 'value', label: 'Leads', numeric: true },
-          ]}
-        >
-          <HBars data={asked} label="Leads" palette={palette} labelWidth={210} />
-        </ChartCard>
-
-        <ChartCard
-          title="Taxa de agendamento por procedimento"
-          subtitle="Leads com agendamento/pagamento sinalizado ou status Agendado/Convertido (mínimo de 5 leads)"
-          rows={rateByProc}
-          columns={[
-            { key: 'name', label: 'Procedimento' },
-            { key: 'total', label: 'Leads', numeric: true },
-            { key: 'hits', label: 'Agendaram', numeric: true },
-            { key: 'value', label: 'Taxa', numeric: true, format: (v) => fmtPct(Number(v)) },
-          ]}
-          emptyText="Ainda não há procedimentos com pelo menos 5 leads no período."
-        >
-          <HBars
-            data={rateByProc}
-            label="Taxa de agendamento"
-            palette={palette}
-            format={(v, row) => (row ? `${fmtPct(v)} (${fmtInt(Number(row.hits))} de ${fmtInt(Number(row.total))})` : fmtPct(v))}
-          />
-        </ChartCard>
-
-        <ChartCard
-          title="Canal de origem"
-          subtitle="Anúncio = mensagem padrão do CTA; Instagram = lead citou a rede; Prospecção = clínica iniciou"
-          rows={byChannel}
-          columns={[
-            { key: 'name', label: 'Canal' },
-            { key: 'value', label: 'Leads', numeric: true },
-          ]}
-        >
-          <HBars data={byChannel} label="Leads" palette={palette} />
-        </ChartCard>
-
-        <section className="card" aria-label="Aguardando resposta">
-          <div className="card-head">
-            <div>
-              <h3 className="card-title">Aguardando resposta da clínica</h3>
-              <p className="card-sub">Última mensagem foi do lead · {fmtInt(awaiting.length)} conversas</p>
-            </div>
+        {show('mapa-calor') && (
+          <div className="span-2">
+            <ChartCard
+              title="Quando os leads escrevem"
+              subtitle="Mensagens recebidas por dia da semana e hora do dia"
+              rows={dayTotals}
+              columns={[
+                { key: 'name', label: 'Dia' },
+                { key: 'value', label: 'Recebidas', numeric: true },
+                { key: 'peak', label: 'Hora de pico', format: (v) => `${String(v)}h` },
+              ]}
+            >
+              <HourHeatmap grid={heat} palette={palette} />
+            </ChartCard>
           </div>
-          <LeadTable rows={awaiting.slice(0, 15)} meta={meta} onOpen={onOpenConv} timeLabel="Esperando há" time={(c) => fmtHours(c.awaitingHours)} empty="Nenhum lead aguardando resposta." />
-        </section>
+        )}
 
-        <section className="card" aria-label="Leads esfriando">
-          <div className="card-head">
-            <div>
-              <h3 className="card-title">Leads esfriando</h3>
-              <p className="card-sub">Engajaram ou pediram agendamento, a clínica respondeu e há mais de 48h sem retorno · {fmtInt(cold.length)}</p>
+        {show('perfil-horario') && (
+          <ChartCard
+            title="Perfil horário das mensagens"
+            subtitle="Total por hora do dia no período"
+            rows={hours}
+            columns={[
+              { key: 'label', label: 'Hora' },
+              { key: 'recebidas', label: 'Recebidas', numeric: true },
+              { key: 'enviadas', label: 'Enviadas', numeric: true },
+            ]}
+            legend={<Legend items={hourSeries} />}
+          >
+            <TwoSeriesLine data={hours} xKey="label" series={hourSeries} palette={palette} height={240} />
+          </ChartCard>
+        )}
+
+        {show('pedidos') && (
+          <ChartCard
+            title="O que os leads pedem"
+            subtitle="Leads que escreveram, por tipo de pedido detectado nas mensagens"
+            rows={asked}
+            columns={[
+              { key: 'name', label: 'Pedido' },
+              { key: 'value', label: 'Leads', numeric: true },
+            ]}
+          >
+            <HBars data={asked} label="Leads" palette={palette} labelWidth={210} />
+          </ChartCard>
+        )}
+
+        {show('agendamento-procedimento') && (
+          <ChartCard
+            title="Taxa de agendamento por procedimento"
+            subtitle="Leads com agendamento/pagamento sinalizado ou status Agendado/Convertido (mínimo de 5 leads)"
+            rows={rateByProc}
+            columns={[
+              { key: 'name', label: 'Procedimento' },
+              { key: 'total', label: 'Leads', numeric: true },
+              { key: 'hits', label: 'Agendaram', numeric: true },
+              { key: 'value', label: 'Taxa', numeric: true, format: (v) => fmtPct(Number(v)) },
+            ]}
+            emptyText="Ainda não há procedimentos com pelo menos 5 leads no período."
+          >
+            <HBars
+              data={rateByProc}
+              label="Taxa de agendamento"
+              palette={palette}
+              format={(v, row) => (row ? `${fmtPct(v)} (${fmtInt(Number(row.hits))} de ${fmtInt(Number(row.total))})` : fmtPct(v))}
+            />
+          </ChartCard>
+        )}
+
+        {show('canal') && (
+          <ChartCard
+            title="Canal de origem"
+            subtitle="Anúncio = mensagem padrão do CTA; Instagram = lead citou a rede; Prospecção = clínica iniciou"
+            rows={byChannel}
+            columns={[
+              { key: 'name', label: 'Canal' },
+              { key: 'value', label: 'Leads', numeric: true },
+            ]}
+          >
+            <HBars data={byChannel} label="Leads" palette={palette} />
+          </ChartCard>
+        )}
+
+        {show('aguardando') && (
+          <section className="card" aria-label="Aguardando resposta">
+            <div className="card-head">
+              <div>
+                <h3 className="card-title">Aguardando resposta da clínica</h3>
+                <p className="card-sub">Última mensagem foi do lead · {fmtInt(awaiting.length)} conversas</p>
+              </div>
             </div>
-          </div>
-          <LeadTable rows={cold.slice(0, 15)} meta={meta} onOpen={onOpenConv} timeLabel="Em silêncio há" time={(c) => fmtHours(c.silentHours)} empty="Nenhum lead esfriando. Bom sinal." />
-        </section>
+            <LeadTable rows={awaiting.slice(0, 15)} meta={meta} onOpen={onOpenConv} timeLabel="Esperando há" time={(c) => fmtHours(c.awaitingHours)} empty="Nenhum lead aguardando resposta." />
+          </section>
+        )}
+
+        {show('esfriando') && (
+          <section className="card" aria-label="Leads esfriando">
+            <div className="card-head">
+              <div>
+                <h3 className="card-title">Leads esfriando</h3>
+                <p className="card-sub">Engajaram ou pediram agendamento, a clínica respondeu e há mais de 48h sem retorno · {fmtInt(cold.length)}</p>
+              </div>
+            </div>
+            <LeadTable rows={cold.slice(0, 15)} meta={meta} onOpen={onOpenConv} timeLabel="Em silêncio há" time={(c) => fmtHours(c.silentHours)} empty="Nenhum lead esfriando. Bom sinal." />
+          </section>
+        )}
       </div>
     </>
   )

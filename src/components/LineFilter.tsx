@@ -1,11 +1,10 @@
 import { useState } from 'react'
-import { Check, CircleHelp, LayoutGrid, Pencil, Phone, RotateCcw, Rows3, Users } from 'lucide-react'
-import type { LucideIcon } from 'lucide-react'
+import { Check, CircleHelp, Pencil, Phone, RotateCcw, Users } from 'lucide-react'
 import { LINE_NONE } from '../lib/analytics'
-import { fmtInt, fmtLine, fmtPct } from '../lib/format'
-import { loadLineFilterStyle, saveLineFilterStyle } from '../lib/storage'
-import type { LineFilterStyle } from '../lib/storage'
+import { fmtLine } from '../lib/format'
 import { useLineNames } from '../lineNames'
+import { ChoiceFilter } from './ChoiceFilter'
+import type { ChoiceOption } from './ChoiceFilter'
 
 interface Props {
   lines: string[]
@@ -16,29 +15,15 @@ interface Props {
   onChange: (line: string) => void
 }
 
-interface Option {
-  value: string
-  title: string
-  sub: string
-  hint: string
-  count: number
-  icon: LucideIcon
-}
-
 const EXAMPLES = ['Loja Centro', 'Vendas', 'Suporte', 'Atacado']
 
+/** Filtro por número da empresa, com o formulário para dar nome a cada número (salvo no navegador). */
 export function LineFilter({ lines, hasUnknownLine, counts, attendants, value, onChange }: Props) {
   const { names, label, isRenamed, rename, resetNames } = useLineNames()
-  const [style, setStyle] = useState<LineFilterStyle>(() => loadLineFilterStyle())
   const [editing, setEditing] = useState(false)
 
-  const changeStyle = (s: LineFilterStyle) => {
-    setStyle(s)
-    saveLineFilterStyle(s)
-  }
-
   const total = [...counts.values()].reduce((a, b) => a + b, 0)
-  const options: Option[] = [
+  const options: ChoiceOption[] = [
     {
       value: 'all',
       title: 'Todos os números',
@@ -71,66 +56,20 @@ export function LineFilter({ lines, hasUnknownLine, counts, attendants, value, o
         ]
       : []),
   ]
-  // Clicar no número já selecionado volta para "todos".
-  const pick = (v: string) => onChange(v !== 'all' && v === value ? 'all' : v)
 
   return (
-    <div className="line-filter">
-      <div className="line-filter-head">
-        <span className="line-filter-label">
-          <Phone size={14} aria-hidden /> Número da empresa
-        </span>
-        {style === 'compact' && (
-          <div className="segmented" role="group" aria-label="Número da empresa">
-            {options.map((o) => (
-              <button key={o.value} type="button" aria-pressed={value === o.value} title={o.hint} onClick={() => pick(o.value)}>
-                {o.value === 'all' ? 'Todos' : o.title}
-                {o.value !== 'all' && <span className="count">{fmtInt(o.count)}</span>}
-              </button>
-            ))}
-          </div>
-        )}
-        <span className="spacer" />
+    <ChoiceFilter
+      label="Número da empresa"
+      icon={Phone}
+      options={options}
+      value={value}
+      onChange={onChange}
+      actions={
         <button type="button" className="btn ghost sm" aria-pressed={editing} aria-expanded={editing} onClick={() => setEditing((e) => !e)}>
           <Pencil size={13} aria-hidden /> Renomear
         </button>
-        <div className="segmented sm" role="group" aria-label="Visual do filtro de número">
-          <button type="button" aria-pressed={style === 'cards'} title="Cartões" aria-label="Visual em cartões" onClick={() => changeStyle('cards')}>
-            <LayoutGrid size={13} aria-hidden />
-          </button>
-          <button type="button" aria-pressed={style === 'compact'} title="Compacto" aria-label="Visual compacto" onClick={() => changeStyle('compact')}>
-            <Rows3 size={13} aria-hidden />
-          </button>
-        </div>
-      </div>
-
-      {style === 'cards' && (
-        <div className="line-cards" role="group" aria-label="Número da empresa">
-          {options.map((o) => {
-            const Icon = o.icon
-            const share = o.value === 'all' ? 1 : total ? o.count / total : 0
-            return (
-              <button key={o.value} type="button" className="line-card" aria-pressed={value === o.value} title={o.hint} onClick={() => pick(o.value)}>
-                <span className="line-card-title">
-                  <Icon size={14} aria-hidden />
-                  <span>{o.title}</span>
-                </span>
-                <span className="line-card-sub">{o.sub}</span>
-                <span className="line-card-foot">
-                  <span>
-                    <b>{fmtInt(o.count)}</b> conversas
-                  </span>
-                  {o.value !== 'all' && <span>{fmtPct(share)}</span>}
-                </span>
-                <span className="line-card-bar" aria-hidden>
-                  <i style={{ width: `${share * 100}%` }} />
-                </span>
-              </button>
-            )
-          })}
-        </div>
-      )}
-
+      }
+    >
       {editing && (
         <div
           className="line-rename"
@@ -175,6 +114,6 @@ export function LineFilter({ lines, hasUnknownLine, counts, attendants, value, o
           </div>
         </div>
       )}
-    </div>
+    </ChoiceFilter>
   )
 }

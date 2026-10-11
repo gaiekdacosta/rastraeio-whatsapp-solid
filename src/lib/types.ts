@@ -84,6 +84,7 @@ export interface Filters {
   status: string // 'all' | 'sem_status' | Status
   channel: string // 'all' | Channel
   line: string // 'all' | 'none' | número da empresa
+  cliente: string // 'all' | id do cliente (lib/clients); só o administrador usa
 }
 
 export interface Dataset {

@@ -19,8 +19,17 @@ interface AuthCtx {
 
 const Ctx = createContext<AuthCtx | null>(null)
 
+const sameList = (a: string[] | null, b: string[] | null) => (a === null || b === null ? a === b : [...a].sort().join() === [...b].sort().join())
+
 const sameUser = (a: AppUser, b: AppUser) =>
-  a.id === b.id && a.email === b.email && a.nome === b.nome && a.papel === b.papel && [...a.numeros].sort().join() === [...b.numeros].sort().join()
+  a.id === b.id &&
+  a.email === b.email &&
+  a.nome === b.nome &&
+  a.papel === b.papel &&
+  a.empresa === b.empresa &&
+  sameList(a.numeros, b.numeros) &&
+  sameList(a.insights, b.insights) &&
+  sameList(a.visaoGeral, b.visaoGeral)
 
 export function AuthProvider({ backend, children }: { backend: Backend; children: ReactNode }) {
   const [state, setState] = useState<AuthState>({ status: 'loading' })

@@ -6,9 +6,11 @@ interface Props {
   title: string
   onClose: () => void
   children: ReactNode
+  /** Mais largo, para listas de opções em duas colunas. */
+  wide?: boolean
 }
 
-export function Modal({ title, onClose, children }: Props) {
+export function Modal({ title, onClose, children, wide }: Props) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose()
@@ -19,7 +21,7 @@ export function Modal({ title, onClose, children }: Props) {
 
   return (
     <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="modal card" role="dialog" aria-modal="true" aria-label={title}>
+      <div className={`modal card${wide ? ' wide' : ''}`} role="dialog" aria-modal="true" aria-label={title}>
         <div className="card-head">
           <h3 className="card-title">{title}</h3>
           <button type="button" className="btn ghost sm" onClick={onClose} aria-label="Fechar">
