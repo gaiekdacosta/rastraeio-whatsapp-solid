@@ -146,6 +146,7 @@ a {
   align-items: flex-start;
   gap: 10px;
   margin-right: auto;
+  min-width: 0;
 }
 .solid-mark {
   flex: none;
@@ -174,6 +175,45 @@ a {
   margin-top: 4px;
   font-size: 12px;
   color: var(--muted);
+}
+/* Empresa do usuário comum, ao lado da marca. */
+.brand-client {
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 3px;
+  min-width: 0;
+  margin-left: 4px;
+  padding-left: 14px;
+  border-left: 1px solid var(--border-strong);
+}
+.brand-client-name {
+  font-size: 17px;
+  font-weight: 700;
+  line-height: 1.15;
+  color: var(--ink);
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.brand-client-sub {
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+@media (max-width: 640px) {
+  .brand-client {
+    padding-left: 10px;
+  }
+  .brand-client-name {
+    font-size: 15px;
+    max-width: 52vw;
+  }
+  .brand-client-sub {
+    display: none;
+  }
 }
 .tabs {
   display: flex;
@@ -617,6 +657,10 @@ a {
   .span-2 {
     grid-column: span 2;
   }
+}
+/* Com parte dos blocos oculta, o próximo bloco de meia largura ocupa o vão em vez de deixar buraco. */
+.blocks-grid {
+  grid-auto-flow: row dense;
 }
 
 /* ---------- Stat tile ---------- */
@@ -1416,6 +1460,9 @@ table.table {
   overflow: auto;
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.18);
 }
+.modal.wide {
+  max-width: 760px;
+}
 
 /* ---------- Usuários (admin) ---------- */
 .access-scroll {
@@ -1507,6 +1554,17 @@ table.table {
   color: var(--muted);
   font-size: 12px;
 }
+.user-cell-empresa {
+  color: var(--ink-2);
+  font-weight: 500;
+}
+.panel-btn {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.panel-btn.none {
+  color: var(--muted);
+}
 .inline-select {
   border: 1px solid var(--border-strong);
   background: var(--surface-1);
@@ -1580,6 +1638,60 @@ fieldset.field {
 .num-check b {
   display: block;
   font-weight: 600;
+}
+.field .num-checks.compact .num-check {
+  padding: 7px 10px;
+  font-size: 13px;
+  line-height: 1.35;
+}
+.block-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.block-picker-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.block-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.block-group-title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+}
+/* Seletor do painel: Visão geral e Insights, uma seção por aba. */
+.panel-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.panel-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.panel-section:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
+.panel-section-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.panel-section-head svg {
+  color: var(--muted);
 }
 .created-note {
   margin-bottom: 14px;

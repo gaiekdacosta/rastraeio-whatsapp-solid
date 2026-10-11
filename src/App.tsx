@@ -5,13 +5,18 @@ import { parseCsv } from './lib/parse'
 import type { ParseResult } from './lib/parse'
 import { applyFilters, attendantsByLine, buildConversations, leadConversations, presetRange, referenceTime } from './lib/analytics'
 import { accessKey, SEM_NUMERO, splitCsvByAccess } from './lib/access'
+import { buildClients, clientNameByKey } from './lib/clients'
+import type { Client } from './lib/clients'
 import { loadMeta, saveMeta } from './lib/storage'
 import type { MetaMap } from './lib/storage'
 import { labelToStatus } from './lib/status'
+import { visibleInsights } from './lib/insights'
+import { visibleOverview } from './lib/overview'
 import { fmtInt } from './lib/format'
 import { useTheme } from './theme'
 import { useLineNames } from './lineNames'
 import { useSession } from './auth/AuthProvider'
+import type { AppUser } from './auth/types'
 import { ThemeToggle } from './components/ThemeToggle'
 import { UserMenu } from './components/UserMenu'
 import { BrandLogo } from './components/BrandLogo'
@@ -50,6 +55,11 @@ export default function App() {
   const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS)
   const [tab, setTab] = useState<Tab>('overview')
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
+  const [users, setUsers] = useState<AppUser[]>([]) // contas (só admin): base do filtro Clientes
+  // Usuário comum: empresa no topo e só os blocos da Visão geral e dos Insights que o administrador escolheu para ele.
+  const empresa = isAdmin ? '' : user.empresa.trim()
+  const overview = useMemo(() => visibleOverview(user), [user])
+  const insights = useMemo(() => visibleInsights(user), [user])
 
   const parseChecked = useCallback((text: string, fileName: string): ParseResult | null => {
     const res = parseCsv(text)
@@ -116,11 +126,49 @@ export default function App() {
     saveMeta(meta)
   }, [meta])
 
-  // Recorte por usuário: admin vê tudo; usuário, só as conversas dos números liberados. No Supabase o
-  // servidor já entrega só esses arquivos; aqui o filtro se repete (e é o único no modo demonstração).
-  const allowed = useMemo(() => (isAdmin ? null : new Set(user.numeros)), [isAdmin, user.numeros])
+  // Contas dos clientes, para o filtro Clientes do topo; a aba Usuários avisa quando elas mudam.
+  useEffect(() => {
+    if (!isAdmin) return
+    let alive = true
+    backend
+      .listUsers()
+      .then((list) => {
+        if (alive) setUsers(list)
+      })
+      .catch(() => undefined) // sem a lista, o topo volta ao filtro por número
+    return () => {
+      alive = false
+    }
+  }, [backend, isAdmin])
+
+  useEffect(() => {
+    if (!empresa) return
+    const previous = document.title
+    document.title = `${empresa} · Rastreio WhatsApp`
+    return () => {
+      document.title = previous
+    }
+  }, [empresa])
+
   const refTime = useMemo(() => dataset?.refTime ?? new Date(), [dataset])
   const baseConvs = useMemo(() => (dataset ? buildConversations(dataset.messages, refTime, dataset.clinicPhones) : []), [dataset, refTime])
+  const baseUnknown = useMemo(() => baseConvs.some((c) => !c.line && !c.isGroup), [baseConvs])
+  // Clientes (só admin): as contas da aba Usuários agrupadas por empresa, mais "Sem cliente" para o que nenhuma conta tem.
+  const clients = useMemo<Client[]>(
+    () => (isAdmin && dataset ? buildClients(users, [...dataset.clinicPhones, ...(baseUnknown ? [SEM_NUMERO] : [])]) : []),
+    [isAdmin, dataset, users, baseUnknown],
+  )
+  const selectedClient = useMemo(
+    () => (isAdmin && filters.cliente !== 'all' ? (clients.find((c) => c.id === filters.cliente) ?? null) : null),
+    [isAdmin, filters.cliente, clients],
+  )
+  const clientNames = useMemo(() => clientNameByKey(clients), [clients])
+  // Recorte: usuário comum vê só os números liberados (no Supabase o servidor já entrega só esses arquivos; aqui o
+  // filtro se repete, e é o único no modo demonstração). Admin vê tudo ou, com um cliente escolhido no topo, só os números dele.
+  const allowed = useMemo(
+    () => (isAdmin ? (selectedClient ? new Set(selectedClient.numeros) : null) : new Set(user.numeros)),
+    [isAdmin, selectedClient, user.numeros],
+  )
   const allConvs = useMemo(() => (allowed ? baseConvs.filter((c) => allowed.has(accessKey(c))) : baseConvs), [baseConvs, allowed])
   const messages = useMemo(() => {
     if (!dataset) return []
@@ -133,7 +181,8 @@ export default function App() {
     return allowed ? all.filter((p) => allowed.has(p)) : all
   }, [dataset, allowed])
   const scoped = useMemo(() => (dataset ? { ...dataset, messages, clinicPhones } : null), [dataset, messages, clinicPhones])
-  const minTime = useMemo(() => messages[0]?.at ?? refTime, [messages, refTime])
+  // Início do período "Tudo": a planilha inteira, para o período não encolher ao trocar de cliente (ou num cliente sem conversas).
+  const minTime = useMemo(() => dataset?.messages[0]?.at ?? refTime, [dataset, refTime])
   const attendants = useMemo(() => attendantsByLine(messages), [messages])
 
   // Status já preenchidos na planilha viram status manual quando ainda não há classificação local.
@@ -173,6 +222,22 @@ export default function App() {
     for (const c of leadConversations(convs, meta)) counts.set(c.line, (counts.get(c.line) ?? 0) + 1)
     return counts
   }, [clinicPhones, allConvs, range, filters, meta])
+  // Contagem de cada cartão do filtro Clientes: os outros filtros valem, o de cliente e o de número não.
+  const clientCounts = useMemo(() => {
+    const counts = new Map<string, number>()
+    if (!clients.length) return { counts, total: 0 }
+    const { convs } = applyFilters(baseConvs, [], range, { ...filters, line: 'all' }, meta)
+    const leads = leadConversations(convs, meta)
+    for (const c of clients) {
+      const keys = new Set(c.numeros)
+      counts.set(c.id, leads.filter((l) => keys.has(accessKey(l))).length)
+    }
+    return { counts, total: leads.length }
+  }, [clients, baseConvs, range, filters, meta])
+  // Cliente escolhido que deixou de existir (conta excluída ou empresa renomeada): volta para todos.
+  useEffect(() => {
+    if (filters.cliente !== 'all' && clients.length > 0 && !selectedClient) setFilters((f) => ({ ...f, cliente: 'all' }))
+  }, [filters.cliente, clients.length, selectedClient])
   // Para a aba Usuários: conversas de leads de cada número na planilha inteira.
   const accessCounts = useMemo(() => {
     const counts = new Map<string, number>()
@@ -224,7 +289,7 @@ export default function App() {
     [backend, parseChecked, showDataset],
   )
 
-  const tabs = TABS.filter((t) => !t.adminOnly || isAdmin)
+  const tabs = TABS.filter((t) => (!t.adminOnly || isAdmin) && (t.id !== 'insights' || insights.size > 0))
 
   const dataView = (
     <DataView
@@ -247,7 +312,7 @@ export default function App() {
     <div className="app">
       <header className="topbar">
         <div className="topbar-inner">
-          <BrandLogo />
+          <BrandLogo empresa={empresa} />
           <nav className="tabs" role="tablist" aria-label="Seções">
             {tabs.map((t) => {
               const Icon = t.icon
@@ -273,7 +338,14 @@ export default function App() {
           </div>
         )}
         {tab === 'usuarios' && isAdmin ? (
-          <UsersView lines={dataset?.clinicPhones ?? []} hasUnknownLine={hasUnknownLine} counts={accessCounts} attendants={attendants} hasBase={!!dataset} />
+          <UsersView
+            lines={dataset?.clinicPhones ?? []}
+            hasUnknownLine={hasUnknownLine}
+            counts={accessCounts}
+            attendants={attendants}
+            hasBase={!!dataset}
+            onUsersChanged={setUsers}
+          />
         ) : loading ? (
           <div className="loading-screen">Carregando base de mensagens…</div>
         ) : !dataset ? (
@@ -296,35 +368,56 @@ export default function App() {
                 attendants={attendants}
                 refTime={refTime}
                 range={range}
+                clients={clients}
+                clientCounts={clientCounts.counts}
+                clientTotal={clientCounts.total}
               />
             )}
-            {tab === 'overview' && (
-              <OverviewView
-                convs={filtered.convs}
-                msgs={filtered.messages}
-                range={range}
-                meta={meta}
-                palette={palette}
-                clinicPhones={clinicPhones}
-                attendants={attendants}
-                activeLine={filters.line}
-                onFilterLine={filterLine}
-                onOpenConv={openConv}
-              />
+            {selectedClient && allConvs.length === 0 ? (
+              <section className="card no-access" aria-label="Cliente sem conversas">
+                <Lock size={28} aria-hidden />
+                <h2>Nenhuma conversa para mostrar</h2>
+                <p>
+                  {selectedClient.numeros.length === 0
+                    ? `${selectedClient.nome} ainda não tem número liberado. Libere os números dele na aba Usuários.`
+                    : `A planilha atual não tem conversas dos números de ${selectedClient.nome}.`}
+                </p>
+              </section>
+            ) : (
+              <>
+              {tab === 'overview' && (
+                <OverviewView
+                  convs={filtered.convs}
+                  msgs={filtered.messages}
+                  range={range}
+                  meta={meta}
+                  palette={palette}
+                  clinicPhones={clinicPhones}
+                  attendants={attendants}
+                  activeLine={filters.line}
+                  visible={overview}
+                  clientOf={isAdmin ? (line) => clientNames.get(line || SEM_NUMERO) : undefined}
+                  onFilterLine={filterLine}
+                  onOpenConv={openConv}
+                />
+              )}
+              {tab === 'conversas' && (
+                <ConversationsView
+                  convs={filtered.convs}
+                  allConvs={allConvs}
+                  meta={meta}
+                  onMeta={updateMeta}
+                  selectedKey={selectedKey}
+                  onSelect={setSelectedKey}
+                  refTime={refTime}
+                  multiLine={clinicPhones.length > 1}
+                />
+              )}
+              {tab === 'insights' && insights.size > 0 && (
+                <InsightsView convs={filtered.convs} msgs={filtered.messages} meta={meta} palette={palette} visible={insights} onOpenConv={openConv} />
+              )}
+              </>
             )}
-            {tab === 'conversas' && (
-              <ConversationsView
-                convs={filtered.convs}
-                allConvs={allConvs}
-                meta={meta}
-                onMeta={updateMeta}
-                selectedKey={selectedKey}
-                onSelect={setSelectedKey}
-                refTime={refTime}
-                multiLine={clinicPhones.length > 1}
-              />
-            )}
-            {tab === 'insights' && <InsightsView convs={filtered.convs} msgs={filtered.messages} meta={meta} palette={palette} onOpenConv={openConv} />}
             {tab === 'dados' && dataView}
           </>
         )}

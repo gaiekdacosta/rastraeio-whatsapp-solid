@@ -14,6 +14,12 @@ export interface AppUser {
   papel: Papel
   /** Números da empresa liberados (só dígitos) e/ou SEM_NUMERO. Administradores veem todos. */
   numeros: string[]
+  /** Empresa do usuário, mostrada no topo do painel. Vazio = só a marca Solid. */
+  empresa: string
+  /** Blocos da aba Insights escolhidos pelo administrador (ids de lib/insights). null = todos. */
+  insights: string[] | null
+  /** Blocos da aba Visão geral escolhidos pelo administrador (ids de lib/overview). null = todos. */
+  visaoGeral: string[] | null
 }
 
 export interface NovoUsuario {
@@ -22,7 +28,13 @@ export interface NovoUsuario {
   nome: string
   papel: Papel
   numeros: string[]
+  empresa: string
+  insights: string[] | null
+  visaoGeral: string[] | null
 }
+
+/** O que o administrador edita direto no perfil (sem a chave de serviço). */
+export type PerfilPatch = Partial<Pick<AppUser, 'nome' | 'papel' | 'empresa' | 'insights' | 'visaoGeral'>>
 
 /** Planilha publicada, já recortada para quem está logado. */
 export interface BasePublicada {
@@ -56,7 +68,7 @@ export interface Backend {
 
   listUsers(): Promise<AppUser[]>
   createUser(u: NovoUsuario): Promise<void>
-  updateUser(id: string, patch: { nome?: string; papel?: Papel }): Promise<void>
+  updateUser(id: string, patch: PerfilPatch): Promise<void>
   setNumbers(id: string, numeros: string[]): Promise<void>
   setPassword(id: string, senha: string): Promise<void>
   deleteUser(id: string): Promise<void>

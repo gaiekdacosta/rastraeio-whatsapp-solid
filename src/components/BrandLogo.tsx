@@ -7,7 +7,8 @@ export function SolidMark({ size = 32 }: { size?: number }) {
   )
 }
 
-export function BrandLogo({ className = '' }: { className?: string }) {
+/** Marca da Solid; com `empresa`, o nome da empresa do usuário aparece ao lado, no lugar do subtítulo. */
+export function BrandLogo({ className = '', empresa = '' }: { className?: string; empresa?: string }) {
   return (
     <div className={`brand ${className}`.trim()}>
       <SolidMark />
@@ -16,8 +17,16 @@ export function BrandLogo({ className = '' }: { className?: string }) {
           <span className="brand-name">Solid</span>
           <span className="brand-tagline">Marketing Digital</span>
         </h1>
-        <p>Rastreio WhatsApp · leads e atendimento</p>
+        {!empresa && <p>Rastreio WhatsApp · leads e atendimento</p>}
       </div>
+      {empresa && (
+        <div className="brand-client">
+          <span className="brand-client-name" title={empresa}>
+            {empresa}
+          </span>
+          <span className="brand-client-sub">Rastreio WhatsApp · leads e atendimento</span>
+        </div>
+      )}
     </div>
   )
 }

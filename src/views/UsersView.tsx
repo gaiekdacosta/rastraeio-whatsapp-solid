@@ -1,14 +1,17 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
-import { CircleHelp, Copy, Pencil, Phone, RefreshCw, ShieldCheck, Trash2, UserPlus } from 'lucide-react'
+import { CircleHelp, Copy, LayoutDashboard, Pencil, Phone, RefreshCw, ShieldCheck, Trash2, UserPlus } from 'lucide-react'
 import { useSession } from '../auth/AuthProvider'
 import { MIN_SENHA, PAPEL_LABEL } from '../auth/types'
-import type { AppUser, Papel } from '../auth/types'
+import type { AppUser, Papel, PerfilPatch } from '../auth/types'
 import { SEM_NUMERO } from '../lib/access'
+import { fullPanel, panelDetail, panelOf, panelSummary, storePanel } from '../lib/panel'
+import type { PanelSelection } from '../lib/panel'
 import { fmtInt, fmtLine } from '../lib/format'
 import { useLineNames } from '../lineNames'
 import { Modal } from '../components/Modal'
 import { PasswordField } from '../components/PasswordField'
+import { PanelPicker } from '../components/PanelPicker'
 import { initials } from '../components/UserMenu'
 
 interface Props {
@@ -20,6 +23,8 @@ interface Props {
   counts: Map<string, number>
   attendants: Map<string, string[]>
   hasBase: boolean
+  /** Avisa o App quando a lista de contas muda (o filtro Clientes do topo nasce dela). */
+  onUsersChanged?: (users: AppUser[]) => void
 }
 
 interface Column {
@@ -30,7 +35,7 @@ interface Column {
   stale: boolean
 }
 
-export function UsersView({ lines, hasUnknownLine, counts, attendants, hasBase }: Props) {
+export function UsersView({ lines, hasUnknownLine, counts, attendants, hasBase, onUsersChanged }: Props) {
   const { backend, user: me, refresh: refreshMe } = useSession()
   const { label, isRenamed } = useLineNames()
   const [users, setUsers] = useState<AppUser[] | null>(null)
@@ -38,15 +43,18 @@ export function UsersView({ lines, hasUnknownLine, counts, attendants, hasBase }
   const [actionError, setActionError] = useState<string | null>(null)
   const [busy, setBusy] = useState<Set<string>>(new Set())
   const [editing, setEditing] = useState<AppUser | null>(null)
+  const [pickingPanel, setPickingPanel] = useState<AppUser | null>(null)
 
   const reload = useCallback(async () => {
     try {
-      setUsers(await backend.listUsers())
+      const list = await backend.listUsers()
+      setUsers(list)
+      onUsersChanged?.(list)
       setLoadError(null)
     } catch (e) {
       setLoadError((e as Error).message)
     }
-  }, [backend])
+  }, [backend, onUsersChanged])
 
   useEffect(() => {
     void reload()
@@ -100,6 +108,12 @@ export function UsersView({ lines, hasUnknownLine, counts, attendants, hasBase }
 
   const changePapel = (u: AppUser, papel: Papel) => void run(u.id, () => backend.updateUser(u.id, { papel }))
 
+  const savePanel = (u: AppUser, selected: PanelSelection) => {
+    const patch = storePanel(selected)
+    setUsers((list) => list?.map((x) => (x.id === u.id ? { ...x, ...patch } : x)) ?? null) // otimista; reload corrige se falhar
+    void run(u.id, () => backend.updateUser(u.id, patch))
+  }
+
   const remove = (u: AppUser) => {
     if (!window.confirm(`Excluir a conta de ${u.nome || u.email} (${u.email})? A pessoa perde o acesso na hora. Esta ação não pode ser desfeita.`)) return
     void run(u.id, () => backend.deleteUser(u.id))
@@ -114,8 +128,8 @@ export function UsersView({ lines, hasUnknownLine, counts, attendants, hasBase }
           <div>
             <h3 className="card-title">Usuários e números liberados</h3>
             <p className="card-sub">
-              Marque os números da planilha que cada usuário pode ver. Ele só recebe as conversas desses números; administradores veem todos. A mudança vale no próximo
-              acesso da pessoa (ou ao recarregar a página).
+              Marque os números da planilha que cada usuário pode ver e, em <b>Painel</b>, escolha os blocos da Visão geral e dos Insights que aparecem para
+              ele. Ele só recebe as conversas desses números; administradores veem tudo. A mudança vale no próximo acesso da pessoa (ou ao recarregar a página).
             </p>
           </div>
           <div className="card-actions">
@@ -150,6 +164,7 @@ export function UsersView({ lines, hasUnknownLine, counts, attendants, hasBase }
                 <tr>
                   <th>Usuário</th>
                   <th>Perfil</th>
+                  <th title="Blocos da Visão geral e da aba Insights que a pessoa vê">Painel</th>
                   {columns.map((c) => (
                     <th key={c.key} className={`access-col${c.stale ? ' stale' : ''}`} title={c.key === SEM_NUMERO ? 'A planilha não diz para qual número escreveram os leads que nunca receberam resposta' : fmtLine(c.key)}>
                       <span className="access-col-title">
@@ -180,7 +195,10 @@ export function UsersView({ lines, hasUnknownLine, counts, attendants, hasBase }
                             <b>{u.nome || '—'}</b>
                             {isMe && <span className="badge sm outline">você</span>}
                             {u.papel === 'usuario' && u.numeros.length === 0 && <span className="badge sm warning">sem acesso</span>}
-                            <span className="user-cell-email">{u.email}</span>
+                            <span className="user-cell-email">
+                              {u.papel === 'usuario' && u.empresa && <span className="user-cell-empresa">{u.empresa} · </span>}
+                              {u.email}
+                            </span>
                           </span>
                         </div>
                       </td>
@@ -196,6 +214,24 @@ export function UsersView({ lines, hasUnknownLine, counts, attendants, hasBase }
                           <option value="usuario">{PAPEL_LABEL.usuario}</option>
                           <option value="admin">{PAPEL_LABEL.admin}</option>
                         </select>
+                      </td>
+                      <td>
+                        {u.papel === 'admin' ? (
+                          <span className="access-all" title="Administradores veem todos os blocos">
+                            <ShieldCheck size={14} aria-hidden /> todos
+                          </span>
+                        ) : (
+                          <button
+                            type="button"
+                            className={`btn ghost sm panel-btn${panelSummary(u) === 'nenhum' ? ' none' : ''}`}
+                            disabled={isBusy}
+                            onClick={() => setPickingPanel(u)}
+                            aria-label={`Escolher o painel de ${u.nome || u.email}`}
+                            title={`Escolher os blocos que esta pessoa vê · ${panelDetail(u)}`}
+                          >
+                            <LayoutDashboard size={13} aria-hidden /> {panelSummary(u)}
+                          </button>
+                        )}
                       </td>
                       {columns.map((c) => (
                         <td key={c.key} className="access-cell">
@@ -243,7 +279,7 @@ export function UsersView({ lines, hasUnknownLine, counts, attendants, hasBase }
               {users && users.length > 0 && columns.length > 0 && (
                 <tfoot>
                   <tr>
-                    <td colSpan={2} className="muted">
+                    <td colSpan={3} className="muted">
                       Pessoas com acesso
                     </td>
                     {columns.map((c) => (
@@ -261,6 +297,8 @@ export function UsersView({ lines, hasUnknownLine, counts, attendants, hasBase }
       </section>
 
       <NewUserCard columns={columns.filter((c) => !c.stale)} onCreated={() => void reload()} />
+
+      {pickingPanel && <PanelModal user={pickingPanel} onClose={() => setPickingPanel(null)} onSave={(selected) => savePanel(pickingPanel, selected)} />}
 
       {editing && (
         <EditUserModal
@@ -283,6 +321,8 @@ function NewUserCard({ columns, onCreated }: { columns: Column[]; onCreated: () 
   const [senha, setSenha] = useState('')
   const [papel, setPapel] = useState<Papel>('usuario')
   const [numeros, setNumeros] = useState<string[]>([])
+  const [empresa, setEmpresa] = useState('')
+  const [panel, setPanel] = useState<PanelSelection>(fullPanel)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [created, setCreated] = useState<{ nome: string; email: string; senha: string } | null>(null)
@@ -294,7 +334,16 @@ function NewUserCard({ columns, onCreated }: { columns: Column[]; onCreated: () 
     setBusy(true)
     setError(null)
     try {
-      await backend.createUser({ nome: nome.trim(), email: email.trim().toLowerCase(), senha, papel, numeros: papel === 'admin' ? [] : numeros })
+      const isUser = papel === 'usuario'
+      await backend.createUser({
+        nome: nome.trim(),
+        email: email.trim().toLowerCase(),
+        senha,
+        papel,
+        numeros: isUser ? numeros : [],
+        empresa: isUser ? empresa.trim() : '',
+        ...(isUser ? storePanel(panel) : { visaoGeral: null, insights: null }),
+      })
       setCreated({ nome: nome.trim(), email: email.trim().toLowerCase(), senha })
       setCopied(false)
       setNome('')
@@ -302,6 +351,8 @@ function NewUserCard({ columns, onCreated }: { columns: Column[]; onCreated: () 
       setSenha('')
       setPapel('usuario')
       setNumeros([])
+      setEmpresa('')
+      setPanel(fullPanel())
       onCreated()
     } catch (err) {
       setError((err as Error).message)
@@ -366,6 +417,12 @@ function NewUserCard({ columns, onCreated }: { columns: Column[]; onCreated: () 
             ))}
           </div>
         </div>
+        {papel === 'usuario' && (
+          <div className="field">
+            <label htmlFor="nu-empresa">Empresa (aparece no topo do painel)</label>
+            <input id="nu-empresa" value={empresa} onChange={(e) => setEmpresa(e.target.value)} maxLength={80} autoComplete="off" placeholder="Ex.: Império 085" />
+          </div>
+        )}
         <fieldset className="field span-all">
           <legend className="field-label">Números liberados</legend>
           {papel === 'admin' ? (
@@ -393,6 +450,12 @@ function NewUserCard({ columns, onCreated }: { columns: Column[]; onCreated: () 
             </div>
           )}
         </fieldset>
+        {papel === 'usuario' && (
+          <fieldset className="field span-all">
+            <legend className="field-label">Painel que a pessoa vê</legend>
+            <PanelPicker value={panel} onChange={setPanel} />
+          </fieldset>
+        )}
         {error && (
           <div className="callout warn span-all" role="alert">
             {error}
@@ -412,6 +475,7 @@ function NewUserCard({ columns, onCreated }: { columns: Column[]; onCreated: () 
 function EditUserModal({ user, onClose, onSaved }: { user: AppUser; onClose: () => void; onSaved: () => void }) {
   const { backend } = useSession()
   const [nome, setNome] = useState(user.nome)
+  const [empresa, setEmpresa] = useState(user.empresa)
   const [senha, setSenha] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -422,7 +486,10 @@ function EditUserModal({ user, onClose, onSaved }: { user: AppUser; onClose: () 
     setBusy(true)
     setError(null)
     try {
-      if (nome.trim() !== user.nome) await backend.updateUser(user.id, { nome: nome.trim() })
+      const patch: PerfilPatch = {}
+      if (nome.trim() !== user.nome) patch.nome = nome.trim()
+      if (empresa.trim() !== user.empresa) patch.empresa = empresa.trim()
+      if (Object.keys(patch).length) await backend.updateUser(user.id, patch)
       if (senha) await backend.setPassword(user.id, senha)
       onSaved()
       onClose()
@@ -443,6 +510,12 @@ function EditUserModal({ user, onClose, onSaved }: { user: AppUser; onClose: () 
           <label htmlFor="eu-nome">Nome</label>
           <input id="eu-nome" value={nome} onChange={(e) => setNome(e.target.value)} required maxLength={80} autoFocus />
         </div>
+        {user.papel === 'usuario' && (
+          <div className="field">
+            <label htmlFor="eu-empresa">Empresa (aparece no topo do painel)</label>
+            <input id="eu-empresa" value={empresa} onChange={(e) => setEmpresa(e.target.value)} maxLength={80} placeholder="Ex.: Império 085" />
+          </div>
+        )}
         <PasswordField id="eu-senha" label="Nova senha (deixe em branco para manter)" value={senha} onChange={setSenha} autoComplete="new-password" canGenerate />
         {senha && <p className="small muted">Copie a senha antes de salvar e envie para a pessoa.</p>}
         {error && (
@@ -456,6 +529,39 @@ function EditUserModal({ user, onClose, onSaved }: { user: AppUser; onClose: () 
           </button>
           <button type="submit" className="btn primary" disabled={busy}>
             {busy ? 'Salvando…' : 'Salvar'}
+          </button>
+        </div>
+      </form>
+    </Modal>
+  )
+}
+
+function PanelModal({ user, onClose, onSave }: { user: AppUser; onClose: () => void; onSave: (selected: PanelSelection) => void }) {
+  const [selected, setSelected] = useState(() => panelOf(user))
+
+  const submit = (e: FormEvent) => {
+    e.preventDefault()
+    onSave(selected)
+    onClose()
+  }
+
+  return (
+    <Modal title={`Painel de ${user.nome || user.email}`} onClose={onClose} wide>
+      <form className="stack" onSubmit={submit}>
+        <p className="small muted">
+          Escolha os indicadores, gráficos e listas que aparecem para esta pessoa nas abas <b>Visão geral</b> e <b>Insights</b>. Os dados continuam limitados aos
+          números liberados para ela.
+        </p>
+        <fieldset className="field">
+          <legend className="sr-only">Painel que a pessoa vê</legend>
+          <PanelPicker value={selected} onChange={setSelected} />
+        </fieldset>
+        <div className="form-actions">
+          <button type="button" className="btn ghost" onClick={onClose}>
+            Cancelar
+          </button>
+          <button type="submit" className="btn primary">
+            Salvar painel
           </button>
         </div>
       </form>
