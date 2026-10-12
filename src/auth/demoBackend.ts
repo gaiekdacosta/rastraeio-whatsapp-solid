@@ -1,9 +1,11 @@
 import type { AppUser, Backend, BasePublicada, Papel } from './types'
 
 /*
- * Modo demonstração: só existe no `npm run dev` sem Supabase configurado, para ver login, perfis e o
- * controle de números sem depender do servidor. Contas e senhas ficam em texto puro no localStorage
- * e a planilha vem de data/ (servida pelo Vite em /__demo/conversas.csv). Nada disso vai para o build.
+ * Modo demonstração: usado sempre que o Supabase não está configurado (no `npm run dev` e no site
+ * publicado), para ver login, perfis e o controle de números sem depender do servidor. Contas e senhas
+ * ficam em texto puro no localStorage; a planilha publicada pelo admin fica no IndexedDB (não cabe no
+ * localStorage). No `npm run dev`, sem planilha publicada, vale a de data/ (servida pelo Vite em
+ * /__demo/conversas.csv), que nunca vai para o build.
  */
 
 const USERS_KEY = 'rastreio-whatsapp.demo.users'
@@ -41,13 +43,49 @@ function write(key: string, value: unknown): void {
   }
 }
 
+const BASE_DB = 'rastreio-whatsapp.demo'
+const BASE_STORE = 'base'
+const BASE_KEY = 'publicada'
+
+/** Uma operação no IndexedDB da planilha; qualquer falha (aba anônima, cota cheia) vira undefined. */
+function baseDb<T>(mode: IDBTransactionMode, op: (store: IDBObjectStore) => IDBRequest): Promise<T | undefined> {
+  return new Promise((resolve) => {
+    let open: IDBOpenDBRequest
+    try {
+      open = indexedDB.open(BASE_DB, 1)
+    } catch {
+      return resolve(undefined)
+    }
+    open.onupgradeneeded = () => open.result.createObjectStore(BASE_STORE)
+    open.onerror = () => resolve(undefined)
+    open.onsuccess = () => {
+      const db = open.result
+      try {
+        const tx = db.transaction(BASE_STORE, mode)
+        const req = op(tx.objectStore(BASE_STORE))
+        tx.oncomplete = () => {
+          db.close()
+          resolve(req.result as T)
+        }
+        tx.onerror = tx.onabort = () => {
+          db.close()
+          resolve(undefined)
+        }
+      } catch {
+        db.close()
+        resolve(undefined)
+      }
+    }
+  })
+}
+
 // Contas salvas antes dos campos empresa, insights e visaoGeral existirem: sem empresa, vendo tudo.
 const strip = ({ senha: _senha, ...u }: DemoUser): AppUser => ({ ...u, empresa: u.empresa ?? '', insights: u.insights ?? null, visaoGeral: u.visaoGeral ?? null })
 
 export function createDemoBackend(): Backend {
   let users: DemoUser[] = read(USERS_KEY, SEED)
   const listeners = new Set<() => void>()
-  let published: BasePublicada | null = null // publicação vale até recarregar a página
+  let published: BasePublicada | null = null
 
   const save = () => write(USERS_KEY, users)
   const notify = () => listeners.forEach((cb) => cb())
@@ -160,6 +198,9 @@ export function createDemoBackend(): Backend {
 
     async loadBase() {
       if (published) return published
+      published = (await baseDb<BasePublicada>('readonly', (st) => st.get(BASE_KEY))) ?? null
+      if (published) return published
+      if (!import.meta.env.DEV) return null
       const res = await fetch('/__demo/conversas.csv')
       if (res.status === 404) return null
       if (!res.ok) throw new Error(`Não foi possível ler a planilha de demonstração (HTTP ${res.status}).`)
@@ -176,6 +217,8 @@ export function createDemoBackend(): Backend {
     async publishBase(p) {
       requireAdmin()
       published = { text: p.text, fileName: p.fileName, clinicPhones: p.clinicPhones, refTime: p.refTime, publishedAt: new Date() }
+      // Se o navegador não guardar, a publicação ainda vale até recarregar a página.
+      await baseDb('readwrite', (st) => st.put(published, BASE_KEY))
     },
   }
 }

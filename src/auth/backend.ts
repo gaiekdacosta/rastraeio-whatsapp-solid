@@ -5,8 +5,11 @@ import { createDemoBackend } from './demoBackend'
 const url = import.meta.env.VITE_SUPABASE_URL?.trim()
 const key = (import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || import.meta.env.VITE_SUPABASE_ANON_KEY)?.trim()
 
+/** Os valores de exemplo do .env.example (copiados sem trocar) contam como "sem Supabase". */
+const exemplo = (v: string) => /SEU-PROJETO|xxxxxx/i.test(v)
+
 /**
- * Supabase quando o .env está configurado. Sem ele: modo demonstração no `npm run dev` e, no build,
- * null (o app mostra como configurar em vez de abrir sem login).
+ * Supabase quando as variáveis apontam para um projeto de verdade. Sem elas: modo demonstração, também no
+ * build publicado, com contas e planilha guardadas só no navegador de quem acessa.
  */
-export const backend: Backend | null = url && key ? createSupabaseBackend(url, key) : import.meta.env.DEV ? createDemoBackend() : null
+export const backend: Backend = url && key && !exemplo(url) && !exemplo(key) ? createSupabaseBackend(url, key) : createDemoBackend()
