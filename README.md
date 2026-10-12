@@ -13,10 +13,12 @@ npm run build      # gera dist/ (site estático, pode ser hospedado em qualquer 
 npm run preview    # serve o build em http://localhost:4173
 ```
 
-Sem `.env`, o `npm run dev` abre em **modo demonstração**: login de mentira guardado no navegador
-(`admin@demo.local` / `admin1234` e `usuario@demo.local` / `usuario1234`) e a planilha lida do primeiro `.csv` de `data/`.
-Serve para ver as telas antes de configurar o Supabase. O modo demonstração não existe no build: sem as variáveis do
-Supabase, o site publicado mostra como configurar em vez de abrir.
+Sem as variáveis do Supabase (ou com os valores de exemplo do `.env.example`), o site abre em **modo demonstração**,
+tanto no `npm run dev` quanto no build publicado: login de mentira guardado no navegador (`admin@demo.local` /
+`admin1234` e `usuario@demo.local` / `usuario1234`, mostrados na tela de login) e a planilha publicada pelo admin em
+**Dados** guardada no IndexedDB do navegador. No `npm run dev`, enquanto nada foi publicado, vale o primeiro `.csv` de
+`data/` (ele nunca vai para o build). Serve para ver as telas antes de configurar o Supabase; não use com dados reais
+num site público, porque as senhas de demonstração estão na própria tela.
 
 ## Login, perfis e números liberados
 

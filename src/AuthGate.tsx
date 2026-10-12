@@ -34,20 +34,3 @@ export function AuthGate() {
       return <App key={state.user.id} />
   }
 }
-
-/** Build de produção sem as variáveis do Supabase: melhor não abrir do que abrir sem login. */
-export function MissingConfig() {
-  return (
-    <AuthLayout>
-      <div className="stack">
-        <div className="callout warn" role="alert">
-          O login ainda não foi configurado neste site.
-        </div>
-        <p className="small muted">
-          Crie o arquivo <code>.env</code> com <code>VITE_SUPABASE_URL</code> e <code>VITE_SUPABASE_PUBLISHABLE_KEY</code> (veja <code>.env.example</code> e o README) e gere o
-          build de novo.
-        </p>
-      </div>
-    </AuthLayout>
-  )
-}

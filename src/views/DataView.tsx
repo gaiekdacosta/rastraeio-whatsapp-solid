@@ -110,7 +110,7 @@ export function DataView({ dataset, skipped, allConvs, attendants, meta, error, 
           )}
           {publish.status === 'done' && (
             <div className="callout" role="status" style={{ marginBottom: 12 }}>
-              Planilha publicada às {fmtTime(publish.at)}.{demo ? ' No modo demonstração ela vale só até recarregar a página.' : ' Os usuários a recebem no próximo acesso.'}
+              Planilha publicada às {fmtTime(publish.at)}.{demo ? ' No modo demonstração ela fica salva só neste navegador.' : ' Os usuários a recebem no próximo acesso.'}
             </div>
           )}
           {publish.status === 'error' && (

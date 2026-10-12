@@ -46,8 +46,7 @@ export function LoginView() {
         <p className="small muted center">Esqueceu a senha? Peça ao administrador para redefinir.</p>
       </form>
 
-      {/* import.meta.env.DEV primeiro: no build o bloco e as senhas de demonstração somem do bundle. */}
-      {import.meta.env.DEV && backend.kind === 'demo' && (
+      {backend.kind === 'demo' && (
         <div className="callout demo-note">
           <div>
             <b>Modo demonstração</b> — o Supabase ainda não foi configurado (.env), então as contas ficam só neste navegador.
