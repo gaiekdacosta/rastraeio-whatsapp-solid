@@ -1,11 +1,16 @@
 import { useRef, useState } from 'react'
-import { CircleHelp, Download, FileSpreadsheet, Lock, Phone, Trash2, Upload } from 'lucide-react'
+import type { FormEvent } from 'react'
+import { Check, CircleHelp, Cloud, CloudOff, Download, FileDown, FileSpreadsheet, Lock, Phone, RefreshCw, Trash2, Upload } from 'lucide-react'
 import type { Conversation, Dataset } from '../lib/types'
 import type { MetaMap } from '../lib/storage'
+import type { FonteOnline } from '../auth/types'
 import { buildLeadsCsv, buildMessagesCsv, downloadText } from '../lib/export'
+import { parseCsv } from '../lib/parse'
+import { DEFAULT_SHEET_INTERVAL, SHEET_INTERVALS, fetchSheetCsv, isGoogleSheet } from '../lib/sheet'
 import { useLineNames } from '../lineNames'
 import { fmtDateTime, fmtInt, fmtLine, fmtTime, toDateKey } from '../lib/format'
 import { SEM_NUMERO } from '../lib/access'
+import type { LiveInfo } from '../components/FilterBar'
 
 export type PublishState =
   | { status: 'idle' }
@@ -27,31 +32,209 @@ interface Props {
   publish: PublishState
   onFile: (file: File) => void
   onClearMeta: () => void
+  /** Planilha online em uso (null = base vem do arquivo publicado). */
+  source: FonteOnline | null
+  live: LiveInfo | null
+  onSaveSource: (fonte: { url: string; intervaloSeg: number }) => Promise<void>
+  onRemoveSource: () => Promise<void>
+  onRefresh: () => void
+  onReport: () => void
 }
 
-export function DataView({ dataset, skipped, allConvs, attendants, meta, error, isAdmin, demo, allowed, publish, onFile, onClearMeta }: Props) {
+type Test = { status: 'idle' } | { status: 'testing' } | { status: 'ok'; summary: string } | { status: 'error'; message: string }
+
+export function DataView({
+  dataset,
+  skipped,
+  allConvs,
+  attendants,
+  meta,
+  error,
+  isAdmin,
+  demo,
+  allowed,
+  publish,
+  onFile,
+  onClearMeta,
+  source,
+  live,
+  onSaveSource,
+  onRemoveSource,
+  onRefresh,
+  onReport,
+}: Props) {
   const inputRef = useRef<HTMLInputElement>(null)
   const { label, isRenamed } = useLineNames()
   const [drag, setDrag] = useState(false)
+  const [url, setUrl] = useState(source?.url ?? '')
+  const [intervalo, setIntervalo] = useState(source?.intervaloSeg ?? DEFAULT_SHEET_INTERVAL)
+  const [test, setTest] = useState<Test>({ status: 'idle' })
+  const [removing, setRemoving] = useState(false)
   const classified = allConvs.filter((c) => meta[c.key]?.status).length
   const withNotes = allConvs.filter((c) => meta[c.key]?.notes?.trim()).length
   const withFollow = allConvs.filter((c) => meta[c.key]?.followUp).length
   const stamp = toDateKey(new Date()).replace(/-/g, '')
+  const columns = dataset?.columns ?? {}
+
+  const saveSource = async (e: FormEvent) => {
+    e.preventDefault()
+    setTest({ status: 'testing' })
+    try {
+      const { text } = await fetchSheetCsv(url)
+      const res = parseCsv(text)
+      if (res.missingColumns.length) throw new Error(`A planilha não tem as colunas esperadas: ${res.missingColumns.join(', ')}. Confira se o link aponta para a aba certa.`)
+      if (!res.messages.length) throw new Error('A planilha não tem mensagens válidas.')
+      await onSaveSource({ url: url.trim(), intervaloSeg: intervalo })
+      const extras = [res.columns.temperature ? `Temperatura (${res.columns.temperature})` : '', res.columns.ad ? `Anúncio (${res.columns.ad})` : ''].filter(Boolean)
+      setTest({
+        status: 'ok',
+        summary: `${fmtInt(res.messages.length)} mensagens e ${res.clinicPhones.length} ${res.clinicPhones.length === 1 ? 'número da empresa' : 'números da empresa'}. ${
+          extras.length ? `Colunas extras encontradas: ${extras.join(', ')}.` : 'Sem as colunas Temperatura e Anúncio.'
+        }`,
+      })
+    } catch (err) {
+      setTest({ status: 'error', message: (err as Error).message })
+    }
+  }
+
+  const removeSource = async () => {
+    if (!window.confirm('Desligar a planilha online? O dashboard volta a usar o último arquivo publicado (ou fica sem base até você publicar um).')) return
+    setRemoving(true)
+    try {
+      await onRemoveSource()
+      setTest({ status: 'idle' })
+    } catch (err) {
+      setTest({ status: 'error', message: (err as Error).message })
+    } finally {
+      setRemoving(false)
+    }
+  }
 
   return (
     <div className="grid grid-2">
+      {isAdmin && (
+        <section className="card span-2" aria-label="Planilha online">
+          <div className="card-head">
+            <div>
+              <h3 className="card-title">
+                <Cloud size={15} aria-hidden style={{ verticalAlign: '-3px', marginRight: 6 }} />
+                Planilha online (tempo real)
+              </h3>
+              <p className="card-sub">
+                Cole o link da planilha do Google Sheets com as conversas. O dashboard de cada pessoa passa a ler o CSV dela sozinho, no intervalo escolhido, sem precisar
+                publicar arquivo. Vale para a planilha inteira, mesmo com vários números de atendimento: a divisão por número e por cliente continua automática.
+              </p>
+            </div>
+          </div>
+          {source && (
+            <div className="source-status" role="status">
+              <span className="source-dot" aria-hidden />
+              <div className="source-text">
+                <b>Ligada</b> · lida a cada {Math.round(source.intervaloSeg / 60)} min
+                {live?.at ? ` · última leitura às ${fmtTime(live.at)}` : ''}
+                {dataset?.origem === 'online' ? ` · ${fmtInt(dataset.messages.length)} mensagens` : ''}
+                <div className="small muted truncate" title={source.url}>
+                  {source.url}
+                </div>
+                {live?.status === 'error' && <div className="small" style={{ color: 'var(--critical-text)' }}>{live.message}</div>}
+              </div>
+              <span className="row-actions">
+                <button type="button" className="btn ghost sm" onClick={onRefresh} disabled={live?.status === 'loading'}>
+                  <RefreshCw size={13} className={live?.status === 'loading' ? 'spin' : undefined} aria-hidden /> Atualizar agora
+                </button>
+                <button type="button" className="btn ghost sm danger" onClick={() => void removeSource()} disabled={removing}>
+                  <CloudOff size={13} aria-hidden /> Desligar
+                </button>
+              </span>
+            </div>
+          )}
+          <form className="source-form" onSubmit={(e) => void saveSource(e)}>
+            <label className="field source-url">
+              <span className="field-label">Link da planilha</span>
+              <input
+                type="url"
+                value={url}
+                onChange={(e) => setUrl(e.target.value)}
+                placeholder="https://docs.google.com/spreadsheets/d/…/edit#gid=…"
+                required
+                spellCheck={false}
+              />
+            </label>
+            <label className="field">
+              <span className="field-label">Ler a cada</span>
+              <select value={intervalo} onChange={(e) => setIntervalo(Number(e.target.value))}>
+                {SHEET_INTERVALS.map((i) => (
+                  <option key={i.seg} value={i.seg}>
+                    {i.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button type="submit" className="btn primary" disabled={test.status === 'testing' || !url.trim()}>
+              {test.status === 'testing' ? <RefreshCw size={14} className="spin" aria-hidden /> : <Check size={14} aria-hidden />}
+              {source ? 'Testar e salvar' : 'Testar e ligar'}
+            </button>
+          </form>
+          {test.status === 'ok' && (
+            <div className="callout" role="status" style={{ marginTop: 10 }}>
+              Planilha lida com sucesso: {test.summary}
+            </div>
+          )}
+          {test.status === 'error' && (
+            <div className="callout warn" role="alert" style={{ marginTop: 10 }}>
+              {test.message}
+            </div>
+          )}
+          <details className="source-help" open={!source}>
+            <summary>Como liberar a planilha para o dashboard</summary>
+            <ol>
+              <li>
+                Abra a planilha no Google Sheets, na aba com as conversas (ex.: <i>Conversas WhatsApp</i>).
+              </li>
+              <li>
+                Em <b>Compartilhar</b> → <b>Acesso geral</b>, escolha <b>Qualquer pessoa com o link</b> como <b>Leitor</b>. Ou use <b>Arquivo → Compartilhar → Publicar na web</b>,
+                escolha a aba e o formato <b>CSV</b>.
+              </li>
+              <li>Copie o endereço do navegador (com a aba aberta) ou o link publicado e cole acima.</li>
+            </ol>
+            <p className="small muted">
+              A planilha precisa ter as colunas Data, Hora, Lead, Telefone, Tipo, É resposta, Respondendo para e Mensagem. Se tiver também <b>Temperatura</b> (frio, morno, quente) e{' '}
+              <b>Anúncio</b> (de qual anúncio o lead veio), o dashboard usa as duas. O Google demora até 5 minutos para refletir mudanças em planilhas publicadas na web.
+            </p>
+            <p className="small muted">
+              <Lock size={12} aria-hidden /> Quem tiver o link consegue abrir a planilha inteira; com ela ligada, o recorte por número liberado acontece no navegador de cada usuário.
+              Para entregar a cada cliente só as conversas dele com garantia no servidor, publique um arquivo em vez de usar a planilha online.
+            </p>
+          </details>
+        </section>
+      )}
+
       <section className="card" aria-label="Base atual">
         <div className="card-head">
           <div>
             <h3 className="card-title">Base atual</h3>
-            <p className="card-sub">{isAdmin ? 'Planilha publicada para os usuários' : 'Conversas dos números liberados para você'}</p>
+            <p className="card-sub">{isAdmin ? 'Planilha usada pelo painel de todos os usuários' : 'Conversas dos números liberados para você'}</p>
           </div>
         </div>
         {error && <div className="callout warn" style={{ marginBottom: 12 }}>{error}</div>}
         {dataset ? (
           <dl className="kv">
-            <dt>Arquivo</dt>
-            <dd>{dataset.fileName}</dd>
+            <dt>Origem</dt>
+            <dd>
+              {dataset.origem === 'online' ? (
+                <>
+                  Planilha online{source ? `, lida a cada ${Math.round(source.intervaloSeg / 60)} min` : ''}
+                  {isGoogleSheet(source?.url ?? '') ? ' (Google Sheets)' : ''}
+                  {!isAdmin && (
+                    <button type="button" className="btn ghost sm" style={{ marginLeft: 8 }} onClick={onRefresh} disabled={live?.status === 'loading'}>
+                      <RefreshCw size={13} className={live?.status === 'loading' ? 'spin' : undefined} aria-hidden /> Atualizar agora
+                    </button>
+                  )}
+                </>
+              ) : (
+                `Arquivo: ${dataset.fileName}`
+              )}
+            </dd>
             <dt>Mensagens</dt>
             <dd>{fmtInt(dataset.messages.length)}{skipped ? ` (${fmtInt(skipped)} linhas ignoradas por data/tipo inválidos)` : ''}</dd>
             <dt>Conversas</dt>
@@ -75,7 +258,18 @@ export function DataView({ dataset, skipped, allConvs, attendants, meta, error, 
                     )
                   })}
             </dd>
-            {dataset.publishedAt ? (
+            <dt>Temperatura e anúncio</dt>
+            <dd>
+              {columns.temperature ? `Temperatura: coluna “${columns.temperature}”` : 'Sem coluna Temperatura'}
+              {' · '}
+              {columns.ad ? `Anúncio: coluna “${columns.ad}”` : allConvs.some((c) => c.ad) ? 'Anúncio: pela mensagem inicial do lead (sem coluna Anúncio)' : 'Sem coluna Anúncio'}
+            </dd>
+            {dataset.origem === 'online' ? (
+              <>
+                <dt>Última leitura</dt>
+                <dd>{dataset.fetchedAt ? fmtDateTime(dataset.fetchedAt) : '—'}</dd>
+              </>
+            ) : dataset.publishedAt ? (
               <>
                 <dt>Publicada em</dt>
                 <dd>{fmtDateTime(dataset.publishedAt)}</dd>
@@ -88,7 +282,7 @@ export function DataView({ dataset, skipped, allConvs, attendants, meta, error, 
             )}
           </dl>
         ) : (
-          <div className="empty">{isAdmin ? 'Nenhuma planilha publicada ainda. Envie o CSV ao lado.' : 'Nenhuma base carregada.'}</div>
+          <div className="empty">{isAdmin ? 'Nenhuma planilha publicada ainda. Ligue a planilha online acima ou envie um CSV ao lado.' : 'Nenhuma base carregada.'}</div>
         )}
       </section>
 
@@ -96,13 +290,18 @@ export function DataView({ dataset, skipped, allConvs, attendants, meta, error, 
         <section className="card" aria-label="Publicar planilha">
           <div className="card-head">
             <div>
-              <h3 className="card-title">Publicar nova planilha</h3>
+              <h3 className="card-title">Publicar arquivo CSV</h3>
               <p className="card-sub">
-                Substitui a planilha de todos os usuários; cada um recebe só as conversas dos números liberados para ele. CSV com as colunas Data, Hora, Lead, Telefone, Tipo,
-                É resposta, Respondendo para, Mensagem, status_manual.
+                Alternativa à planilha online: substitui a planilha de todos os usuários; cada um recebe só as conversas dos números liberados para ele. CSV com as colunas Data,
+                Hora, Lead, Telefone, Tipo, É resposta, Respondendo para, Mensagem, status_manual (e, se quiser, Temperatura e Anúncio).
               </p>
             </div>
           </div>
+          {source && (
+            <div className="callout" style={{ marginBottom: 12 }}>
+              A planilha online está ligada e tem prioridade sobre o arquivo. Desligue-a acima para voltar a usar um arquivo publicado.
+            </div>
+          )}
           {publish.status === 'publishing' && (
             <div className="callout" role="status" style={{ marginBottom: 12 }}>
               Publicando a planilha…
@@ -134,7 +333,7 @@ export function DataView({ dataset, skipped, allConvs, attendants, meta, error, 
           >
             <FileSpreadsheet size={28} style={{ color: 'var(--muted)' }} aria-hidden />
             <p style={{ margin: '8px 0 10px' }}>Arraste o CSV aqui ou</p>
-            <button type="button" className="btn primary" disabled={publish.status === 'publishing'} onClick={() => inputRef.current?.click()}>
+            <button type="button" className="btn primary" disabled={publish.status === 'publishing' || !!source} onClick={() => inputRef.current?.click()}>
               <Upload size={14} aria-hidden /> Escolher arquivo
             </button>
             <input
@@ -182,20 +381,29 @@ export function DataView({ dataset, skipped, allConvs, attendants, meta, error, 
         <div className="card-head">
           <div>
             <h3 className="card-title">Exportar</h3>
-            <p className="card-sub">Leve a classificação de volta para a planilha</p>
+            <p className="card-sub">Relatório para o cliente e classificação de volta para a planilha</p>
           </div>
         </div>
         <div className="stack">
           <div className="row-between">
             <div>
+              <b>Relatório em PDF</b>
+              <div className="small muted">Métricas principais, gráficos e destaques do período e dos filtros atuais, prontos para enviar ao cliente.</div>
+            </div>
+            <button type="button" className="btn primary" disabled={!dataset} onClick={onReport}>
+              <FileDown size={14} aria-hidden /> PDF
+            </button>
+          </div>
+          <div className="row-between">
+            <div>
               <b>Mensagens com status_manual preenchido</b>
-              <div className="small muted">Mesmas colunas da planilha original; cada linha recebe o status da sua conversa.</div>
+              <div className="small muted">Mesmas colunas da planilha original (inclusive Temperatura e Anúncio); cada linha recebe o status da sua conversa.</div>
             </div>
             <button
               type="button"
               className="btn"
               disabled={!dataset}
-              onClick={() => dataset && downloadText(`rastreio-whatsapp-mensagens-${stamp}.csv`, buildMessagesCsv(dataset.messages, allConvs, meta))}
+              onClick={() => dataset && downloadText(`rastreio-whatsapp-mensagens-${stamp}.csv`, buildMessagesCsv(dataset.messages, allConvs, meta, dataset.columns))}
             >
               <Download size={14} aria-hidden /> CSV
             </button>
@@ -203,7 +411,7 @@ export function DataView({ dataset, skipped, allConvs, attendants, meta, error, 
           <div className="row-between">
             <div>
               <b>Resumo por lead</b>
-              <div className="small muted">Uma linha por conversa: procedimento, canal, estágio, tempos de resposta, status, follow-up e notas.</div>
+              <div className="small muted">Uma linha por conversa: procedimento, canal, temperatura, anúncio, estágio, tempos de resposta, status, follow-up e notas.</div>
             </div>
             <button type="button" className="btn" disabled={!allConvs.length} onClick={() => downloadText(`rastreio-whatsapp-leads-${stamp}.csv`, buildLeadsCsv(allConvs, meta, label))}>
               <Download size={14} aria-hidden /> CSV
@@ -264,6 +472,19 @@ export function DataView({ dataset, skipped, allConvs, attendants, meta, error, 
           <li>
             <b>Acesso por número</b>: cada usuário vê só as conversas atribuídas aos números liberados para ele pelo administrador (inclusive nos totais e exportações).
             As conversas “não identificadas” só aparecem para quem tem “Sem número” liberado.
+          </li>
+          <li>
+            <b>Planilha online</b>: o dashboard lê o CSV do link no intervalo escolhido e recalcula tudo quando a planilha muda; a referência de tempo é sempre a última mensagem da
+            planilha, igual para todos.
+          </li>
+          <li>
+            <b>Temperatura</b>: coluna Temperatura da planilha (frio, morno ou quente, em qualquer grafia); vale o último valor preenchido nas linhas da conversa. Sem a coluna, o
+            lead fica “sem temperatura”.
+          </li>
+          <li>
+            <b>Anúncio</b>: coluna Anúncio da planilha (também aceita “Campanha” ou “Ad”). Sem ela, vale a mensagem padrão com que o lead chegou (“tenho interesse no…”, ou um texto
+            inicial idêntico ao de pelo menos 5 outros leads). No ranking, “agendados” = agendamento ou pagamento sinalizado na conversa, ou status Agendado/Convertido; “vendas” =
+            conversas com status Convertido (dado na aba Conversas ou vindo da coluna status_manual da planilha).
           </li>
           <li>
             <b>Procedimento</b>: extraído da mensagem padrão do anúncio (“tenho interesse no…”); na falta dela, de palavras-chave nas mensagens do lead e, por último, nas respostas da clínica.

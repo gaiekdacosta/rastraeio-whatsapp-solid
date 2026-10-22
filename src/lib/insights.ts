@@ -12,6 +12,7 @@ export const INSIGHTS = [
   { id: 'pedidos', label: 'O que os leads pedem', group: 'Gráficos' },
   { id: 'agendamento-procedimento', label: 'Taxa de agendamento por procedimento', group: 'Gráficos' },
   { id: 'canal', label: 'Canal de origem', group: 'Gráficos' },
+  { id: 'agendamento-anuncio', label: 'Taxa de agendamento por anúncio', group: 'Gráficos' },
   { id: 'aguardando', label: 'Aguardando resposta da clínica', group: 'Listas de leads' },
   { id: 'esfriando', label: 'Leads esfriando', group: 'Listas de leads' },
 ] as const

@@ -1,10 +1,10 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
-import { ChevronLeft, ExternalLink, Phone, Search } from 'lucide-react'
+import { ChevronLeft, ExternalLink, Megaphone, Phone, Search } from 'lucide-react'
 import type { Conversation, ConvMeta, Status } from '../lib/types'
 import type { MetaMap } from '../lib/storage'
 import { STATUS_LABEL, STATUS_ORDER } from '../lib/status'
 import { fmtDateKey, fmtDateTime, fmtHours, fmtInt, fmtLine, fmtMinutes, fmtPhone, fmtShortDate, fmtTime, toDateKey } from '../lib/format'
-import { StageBadge, StatusBadge } from '../components/StatusBadge'
+import { StageBadge, StatusBadge, TemperatureBadge } from '../components/StatusBadge'
 import { useMediaQuery } from '../hooks'
 import { useLineNames } from '../lineNames'
 
@@ -35,7 +35,7 @@ export function ConversationsView({ convs, allConvs, meta, onMeta, selectedKey, 
       new Map(
         allConvs.map((c) => [
           c.key,
-          `${c.name} ${c.phone} ${c.lines.join(' ')} ${c.procedure} ${c.messages.map((m) => m.text).join(' ')}`.toLowerCase(),
+          `${c.name} ${c.phone} ${c.lines.join(' ')} ${c.procedure} ${c.ad} ${c.messages.map((m) => m.text).join(' ')}`.toLowerCase(),
         ]),
       ),
     [allConvs],
@@ -134,6 +134,7 @@ export function ConversationsView({ convs, allConvs, meta, onMeta, selectedKey, 
                   </span>
                   <span className="meta">
                     <StatusBadge small status={st} />
+                    <TemperatureBadge small temperature={c.temperature} />
                     <span className="badge sm outline">{c.procedure}</span>
                     {multiLine && (
                       <span className="badge sm outline" title="Número da empresa que atendeu">
@@ -208,6 +209,7 @@ function Detail({
           </div>
           <div className="tags">
             <StatusBadge status={meta.status} />
+            <TemperatureBadge temperature={conv.temperature} />
             <StageBadge stage={conv.stage} />
             {multiLine && (
               <span className="badge outline" title="Número da empresa que mais respondeu nesta conversa">
@@ -222,6 +224,12 @@ function Detail({
             )}
             <span className="badge outline">{conv.procedure}</span>
             <span className="badge outline">{conv.channel}</span>
+            {conv.ad && (
+              <span className="badge outline" title={conv.adSource === 'planilha' ? 'Anúncio, conforme a coluna Anúncio da planilha' : 'Anúncio identificado pela mensagem inicial do lead'}>
+                <Megaphone size={12} aria-hidden />
+                {conv.ad}
+              </span>
+            )}
             {conv.askedPrice && <span className="badge outline">Perguntou valor</span>}
             {conv.askedAddress && <span className="badge outline">Pediu endereço</span>}
           </div>

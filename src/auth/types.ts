@@ -36,6 +36,13 @@ export interface NovoUsuario {
 /** O que o administrador edita direto no perfil (sem a chave de serviço). */
 export type PerfilPatch = Partial<Pick<AppUser, 'nome' | 'papel' | 'empresa' | 'insights' | 'visaoGeral'>>
 
+/** Planilha online: o dashboard lê o CSV deste link em intervalos, direto do navegador de cada pessoa. */
+export interface FonteOnline {
+  url: string
+  intervaloSeg: number
+  definidaEm: Date | null
+}
+
 /** Planilha publicada, já recortada para quem está logado. */
 export interface BasePublicada {
   text: string
@@ -45,6 +52,8 @@ export interface BasePublicada {
   /** Última mensagem da base inteira: referência de espera igual para todos. */
   refTime: Date | null
   publishedAt: Date | null
+  /** Quando definida, vale a planilha online e `text` vem vazio: o app lê o CSV do link. */
+  fonte: FonteOnline | null
 }
 
 export interface Publicacao {
@@ -73,7 +82,9 @@ export interface Backend {
   setPassword(id: string, senha: string): Promise<void>
   deleteUser(id: string): Promise<void>
 
-  /** null = nenhuma planilha publicada ainda. */
+  /** null = nenhuma planilha publicada nem planilha online definida ainda. */
   loadBase(user: AppUser): Promise<BasePublicada | null>
   publishBase(p: Publicacao): Promise<void>
+  /** Define (ou, com null, desliga) a planilha online que todos passam a ler. Só administradores. */
+  setSource(fonte: Pick<FonteOnline, 'url' | 'intervaloSeg'> | null): Promise<void>
 }

@@ -1,5 +1,5 @@
 import { createClient, FunctionsHttpError } from '@supabase/supabase-js'
-import type { AppUser, Backend, BasePublicada, NovoUsuario, Papel, PerfilPatch, Publicacao } from './types'
+import type { AppUser, Backend, BasePublicada, FonteOnline, NovoUsuario, Papel, PerfilPatch, Publicacao } from './types'
 import { joinCsv } from '../lib/access'
 
 const BUCKET = 'conversas'
@@ -45,6 +45,8 @@ function dbError(e: { message: string }): Error {
     return new Error('O banco ainda não tem os campos de empresa e insights. Rode a migration 20261010120000_empresa_e_insights.sql no Supabase.')
   if (/column .*visao_geral.* does not exist/i.test(e.message))
     return new Error('O banco ainda não tem o campo da Visão geral por usuário. Rode a migration 20261010160000_visao_geral_por_usuario.sql no Supabase.')
+  if (/relation .*fonte_planilha.* does not exist|fonte_planilha.*schema cache/i.test(e.message))
+    return new Error('O banco ainda não tem a tabela da planilha online. Rode a migration 20261022120000_fonte_planilha.sql no Supabase.')
   return new Error(e.message)
 }
 
@@ -170,11 +172,20 @@ export function createSupabaseBackend(url: string, key: string): Backend {
     },
 
     async loadBase(user): Promise<BasePublicada | null> {
-      const { data: base, error } = await sb
-        .from('base_conversas')
-        .select('versao, nome_arquivo, numeros, ultima_mensagem, publicada_em')
-        .maybeSingle()
-      if (error) throw dbError(error)
+      const [baseRes, fonteRes] = await Promise.all([
+        sb.from('base_conversas').select('versao, nome_arquivo, numeros, ultima_mensagem, publicada_em').maybeSingle(),
+        sb.from('fonte_planilha').select('url, intervalo_seg, definida_em').maybeSingle(),
+      ])
+      if (baseRes.error) throw dbError(baseRes.error)
+      // Banco sem a migration da planilha online: segue só com o arquivo publicado.
+      const semTabela = !!fonteRes.error && /does not exist|schema cache/i.test(fonteRes.error.message)
+      if (fonteRes.error && !semTabela) throw dbError(fonteRes.error)
+      const fonte: FonteOnline | null = fonteRes.data
+        ? { url: fonteRes.data.url, intervaloSeg: fonteRes.data.intervalo_seg, definidaEm: fonteRes.data.definida_em ? new Date(fonteRes.data.definida_em) : null }
+        : null
+      const base = baseRes.data
+      // Com planilha online, ninguém baixa os arquivos do Storage: cada navegador lê o CSV do link.
+      if (fonte) return { text: '', fileName: '', clinicPhones: [], refTime: null, publishedAt: null, fonte }
       if (!base) return null
       // Admin baixa a planilha inteira; usuário, um arquivo por número liberado (o Storage recusa os demais).
       const paths = user.papel === 'admin' ? [`${base.versao}/completa.csv`] : user.numeros.map((n) => `${base.versao}/numeros/${n}.csv`)
@@ -194,7 +205,25 @@ export function createSupabaseBackend(url: string, key: string): Backend {
         clinicPhones: base.numeros ?? [],
         refTime: base.ultima_mensagem ? new Date(base.ultima_mensagem) : null,
         publishedAt: base.publicada_em ? new Date(base.publicada_em) : null,
+        fonte: null,
       }
+    },
+
+    async setSource(fonte) {
+      if (!fonte) {
+        const { error } = await sb.from('fonte_planilha').delete().eq('id', true)
+        if (error) throw dbError(error)
+        return
+      }
+      const userId = await uid()
+      const { error } = await sb.from('fonte_planilha').upsert({
+        id: true,
+        url: fonte.url,
+        intervalo_seg: fonte.intervaloSeg,
+        definida_em: new Date().toISOString(),
+        definida_por: userId,
+      })
+      if (error) throw dbError(error)
     },
 
     async publishBase(p: Publicacao) {

@@ -4,10 +4,12 @@ import type { Conversation, Message } from '../lib/types'
 import type { MetaMap } from '../lib/storage'
 import type { Palette } from '../theme'
 import {
+  adSummary,
   awaitingList,
   coldList,
   countBy,
   funnel,
+  rankAds,
   heatmapReceived,
   hourProfile,
   leadConversations,
@@ -19,6 +21,7 @@ import {
 } from '../lib/analytics'
 import { WEEKDAYS_LONG, fmtHours, fmtInt, fmtMinutes, fmtPct } from '../lib/format'
 import { STAGE_LABEL } from '../lib/status'
+import { AD_NONE_LABEL } from '../lib/analytics'
 import type { InsightId } from '../lib/insights'
 import { StatTile } from '../components/StatTile'
 import { ChartCard } from '../components/ChartCard'
@@ -55,6 +58,13 @@ export function InsightsView({ convs, msgs, meta, palette, visible, onOpenConv }
     [leads, meta],
   )
   const byChannel = useMemo(() => countBy(leads, (c) => c.channel), [leads])
+  const rateByAd = useMemo(
+    () => scheduleRateBy(leads, meta, (c) => c.ad || AD_NONE_LABEL).map((r) => ({ name: r.name, value: r.rate, total: r.total, hits: r.hits })),
+    [leads, meta],
+  )
+  const hasTemperature = leads.some((c) => c.temperature)
+  const hasAds = leads.some((c) => c.ad)
+  const ads = useMemo(() => adSummary(leads, meta), [leads, meta])
   const awaiting = useMemo(() => awaitingList(leads), [leads])
   const cold = useMemo(() => coldList(leads, meta), [leads, meta])
   const asked = useMemo(
@@ -86,6 +96,20 @@ export function InsightsView({ convs, msgs, meta, palette, visible, onOpenConv }
   if (Number.isFinite(responseRate)) highlights.push(`${fmtPct(responseRate)} dos leads receberam resposta; mediana da primeira resposta de ${fmtMinutes(median(firstTimes))}.`)
   if (Number.isFinite(askedPriceShare)) highlights.push(`${fmtPct(askedPriceShare)} perguntaram valor e ${fmtPct(askedScheduleShare)} pediram agendamento ou avaliação.`)
   if (awaiting.length) highlights.push(`${fmtInt(awaiting.length)} leads estão com a última mensagem sem resposta da clínica.`)
+  if (hasTemperature && leads.length) {
+    const hot = leads.filter((c) => c.temperature === 'quente').length
+    const warm = leads.filter((c) => c.temperature === 'morno').length
+    highlights.push(`${fmtPct(hot / leads.length)} dos leads estão quentes e ${fmtPct(warm / leads.length)} mornos, segundo a planilha.`)
+  }
+  if (hasAds && ads.length) {
+    const top = rankAds(ads, 'leads')[0]
+    const topHot = hasTemperature ? rankAds(ads, 'quente')[0] : null
+    const topSales = rankAds(ads, 'vendas')[0]
+    let line = `O anúncio “${top.ad}” é o que mais gera leads (${fmtInt(top.leads)})`
+    if (topHot && topHot.quente > 0) line += topHot.ad === top.ad ? ` e também o que mais gera leads quentes (${fmtInt(topHot.quente)})` : `; “${topHot.ad}” é o que mais gera leads quentes (${fmtInt(topHot.quente)})`
+    if (topSales.vendas > 0) line += `; “${topSales.ad}” é o que mais gera vendas (${fmtInt(topSales.vendas)})`
+    highlights.push(`${line}.`)
+  }
 
   const hourSeries = [
     { key: 'recebidas', label: 'Recebidas (leads)', color: palette.series1 },
@@ -226,6 +250,33 @@ export function InsightsView({ convs, msgs, meta, palette, visible, onOpenConv }
             ]}
           >
             <HBars data={byChannel} label="Leads" palette={palette} />
+          </ChartCard>
+        )}
+
+        {show('agendamento-anuncio') && (
+          <ChartCard
+            title="Taxa de agendamento por anúncio"
+            subtitle="Leads com agendamento/pagamento sinalizado ou status Agendado/Convertido, por anúncio de origem (mínimo de 5 leads)"
+            rows={rateByAd}
+            columns={[
+              { key: 'name', label: 'Anúncio' },
+              { key: 'total', label: 'Leads', numeric: true },
+              { key: 'hits', label: 'Agendaram', numeric: true },
+              { key: 'value', label: 'Taxa', numeric: true, format: (v) => fmtPct(Number(v)) },
+            ]}
+            emptyText={
+              hasAds
+                ? 'Ainda não há anúncios com pelo menos 5 leads no período.'
+                : 'Nenhum anúncio identificado: adicione a coluna Anúncio na planilha ou use a mensagem padrão do anúncio no WhatsApp.'
+            }
+          >
+            <HBars
+              data={rateByAd}
+              label="Taxa de agendamento"
+              palette={palette}
+              labelWidth={190}
+              format={(v, row) => (row ? `${fmtPct(v)} (${fmtInt(Number(row.hits))} de ${fmtInt(Number(row.total))})` : fmtPct(v))}
+            />
           </ChartCard>
         )}
 

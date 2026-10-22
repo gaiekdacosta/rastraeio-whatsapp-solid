@@ -1,18 +1,33 @@
-import { CalendarRange, Filter, Phone, RotateCcw, X } from 'lucide-react'
+import { CalendarRange, Filter, Megaphone, Phone, RefreshCw, RotateCcw, Thermometer, X } from 'lucide-react'
 import type { Filters, RangePreset } from '../lib/types'
 import type { Client } from '../lib/clients'
-import { LINE_NONE } from '../lib/analytics'
-import { fmtDateKey, fmtDateTime } from '../lib/format'
+import { AD_NONE, AD_NONE_LABEL, LINE_NONE } from '../lib/analytics'
+import { fmtDateKey, fmtDateTime, fmtTime } from '../lib/format'
 import { STATUS_LABEL, STATUS_ORDER } from '../lib/status'
+import { TEMPERATURE_LABEL, TEMPERATURE_NONE, TEMPERATURE_NONE_LABEL, TEMPERATURE_ORDER } from '../lib/temperature'
 import { useLineNames } from '../lineNames'
 import { ClientFilter } from './ClientFilter'
 import { LineFilter } from './LineFilter'
+
+/** Estado da leitura da planilha online, para o botão de atualizar. */
+export interface LiveInfo {
+  status: 'idle' | 'loading' | 'ok' | 'error'
+  at: Date | null
+  message: string | null
+  intervaloSeg: number
+}
 
 interface Props {
   filters: Filters
   onChange: (f: Filters) => void
   procedures: string[]
   channels: string[]
+  /** A base tem leads com temperatura (coluna Temperatura da planilha). */
+  hasTemperature: boolean
+  /** Anúncios identificados na base, em ordem alfabética. */
+  ads: string[]
+  /** A base tem leads sem anúncio identificado. */
+  hasNoAd: boolean
   lines: string[]
   hasUnknownLine: boolean
   lineCounts: Map<string, number> // conversas de leads por número ('' = não identificado), com os demais filtros aplicados
@@ -23,6 +38,9 @@ interface Props {
   clients?: Client[]
   clientCounts?: Map<string, number>
   clientTotal?: number
+  /** Planilha online: última leitura e botão de atualizar agora. */
+  live?: LiveInfo | null
+  onRefresh?: () => void
 }
 
 const PRESETS: { id: RangePreset; label: string }[] = [
@@ -33,20 +51,53 @@ const PRESETS: { id: RangePreset; label: string }[] = [
   { id: 'custom', label: 'Personalizado' },
 ]
 
-export const DEFAULT_FILTERS: Filters = { preset: 'all', from: '', to: '', procedure: 'all', status: 'all', channel: 'all', line: 'all', cliente: 'all' }
+export const DEFAULT_FILTERS: Filters = {
+  preset: 'all',
+  from: '',
+  to: '',
+  procedure: 'all',
+  status: 'all',
+  channel: 'all',
+  line: 'all',
+  cliente: 'all',
+  temperature: 'all',
+  ad: 'all',
+}
 
-export function FilterBar({ filters, onChange, procedures, channels, lines, hasUnknownLine, lineCounts, attendants, refTime, range, clients, clientCounts, clientTotal }: Props) {
+export function FilterBar({
+  filters,
+  onChange,
+  procedures,
+  channels,
+  hasTemperature,
+  ads,
+  hasNoAd,
+  lines,
+  hasUnknownLine,
+  lineCounts,
+  attendants,
+  refTime,
+  range,
+  clients,
+  clientCounts,
+  clientTotal,
+  live,
+  onRefresh,
+}: Props) {
   const { label } = useLineNames()
   const hasClients = !!clients?.some((c) => !c.pseudo)
   // Com clientes, o filtro por número só aparece dentro de um cliente: sem cliente escolhido ele repetiria todos os números.
   const showLines = lines.length > 1 && (!hasClients || filters.cliente !== 'all')
+  const showAds = ads.length > 0
   const dirty =
     filters.preset !== 'all' ||
     filters.procedure !== 'all' ||
     filters.status !== 'all' ||
     filters.channel !== 'all' ||
     filters.line !== 'all' ||
-    filters.cliente !== 'all'
+    filters.cliente !== 'all' ||
+    filters.temperature !== 'all' ||
+    filters.ad !== 'all'
   return (
     <div className="filterbar" role="region" aria-label="Filtros">
       {hasClients && clients && (
@@ -132,6 +183,34 @@ export function FilterBar({ filters, onChange, procedures, channels, lines, hasU
           ))}
         </select>
       </label>
+      {hasTemperature && (
+        <label className="control" title="Temperatura do lead, conforme a coluna Temperatura da planilha">
+          <Thermometer size={14} aria-hidden />
+          <select aria-label="Temperatura do lead" value={filters.temperature} onChange={(e) => onChange({ ...filters, temperature: e.target.value })}>
+            <option value="all">Todas as temperaturas</option>
+            {TEMPERATURE_ORDER.map((t) => (
+              <option key={t} value={t}>
+                {TEMPERATURE_LABEL[t]}
+              </option>
+            ))}
+            <option value={TEMPERATURE_NONE}>{TEMPERATURE_NONE_LABEL}</option>
+          </select>
+        </label>
+      )}
+      {showAds && (
+        <label className="control" title="Anúncio que trouxe o lead (coluna Anúncio da planilha ou mensagem inicial do anúncio)">
+          <Megaphone size={14} aria-hidden />
+          <select aria-label="Anúncio" value={filters.ad} onChange={(e) => onChange({ ...filters, ad: e.target.value })}>
+            <option value="all">Todos os anúncios</option>
+            {ads.map((a) => (
+              <option key={a} value={a}>
+                {a}
+              </option>
+            ))}
+            {hasNoAd && <option value={AD_NONE}>{AD_NONE_LABEL}</option>}
+          </select>
+        </label>
+      )}
       {!showLines && filters.line !== 'all' && (
         <button type="button" className="btn ghost sm" title="Remover filtro de número" onClick={() => onChange({ ...filters, line: 'all' })}>
           <Phone size={13} aria-hidden /> {filters.line === LINE_NONE ? 'Não identificado' : label(filters.line)} <X size={12} aria-hidden />
@@ -143,6 +222,22 @@ export function FilterBar({ filters, onChange, procedures, channels, lines, hasU
         </button>
       )}
       <span className="spacer" />
+      {live && (
+        <button
+          type="button"
+          className={`btn ghost sm live-btn${live.status === 'error' ? ' warn' : ''}`}
+          onClick={onRefresh}
+          disabled={live.status === 'loading'}
+          title={
+            live.status === 'error'
+              ? live.message ?? 'Falha ao ler a planilha online'
+              : `Planilha online, lida de novo a cada ${Math.round(live.intervaloSeg / 60)} min. Clique para atualizar agora.`
+          }
+        >
+          <RefreshCw size={13} className={live.status === 'loading' ? 'spin' : undefined} aria-hidden />
+          {live.status === 'loading' ? 'Atualizando…' : live.status === 'error' ? 'Falha ao atualizar' : live.at ? `Atualizado às ${fmtTime(live.at)}` : 'Atualizar'}
+        </button>
+      )}
       <span className="pill-note" title="Os cálculos de espera usam a última mensagem da base como referência">
         {fmtDateKey(range.from)} – {fmtDateKey(range.to)} · referência {fmtDateTime(refTime)}
       </span>

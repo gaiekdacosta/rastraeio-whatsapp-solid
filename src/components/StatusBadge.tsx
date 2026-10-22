@@ -1,7 +1,8 @@
-import { Ban, CalendarCheck, CheckCircle2, Clock, MessageCircle, Sparkles, XCircle } from 'lucide-react'
+import { Ban, CalendarCheck, CheckCircle2, Clock, Flame, MessageCircle, Snowflake, Sparkles, Thermometer, XCircle } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
-import type { Stage, Status } from '../lib/types'
+import type { Stage, Status, Temperature } from '../lib/types'
 import { STAGE_LABEL, STATUS_LABEL, STATUS_TONE } from '../lib/status'
+import { TEMPERATURE_LABEL } from '../lib/temperature'
 
 const ICONS: Record<Status, LucideIcon> = {
   novo: Sparkles,
@@ -21,6 +22,24 @@ export function StatusBadge({ status, small }: { status?: Status; small?: boolea
     <span className={`badge ${STATUS_TONE[status]}${cls}`}>
       <Icon size={small ? 11 : 12} aria-hidden />
       {STATUS_LABEL[status]}
+    </span>
+  )
+}
+
+const TEMP_ICONS: Record<Temperature, LucideIcon> = {
+  frio: Snowflake,
+  morno: Thermometer,
+  quente: Flame,
+}
+
+/** Temperatura do lead (coluna Temperatura da planilha). Sem temperatura, não mostra nada. */
+export function TemperatureBadge({ temperature, small }: { temperature: Temperature | null; small?: boolean }) {
+  if (!temperature) return null
+  const Icon = TEMP_ICONS[temperature]
+  return (
+    <span className={`badge temp-${temperature}${small ? ' sm' : ''}`} title="Temperatura do lead, conforme a planilha">
+      <Icon size={small ? 11 : 12} aria-hidden />
+      {TEMPERATURE_LABEL[temperature]}
     </span>
   )
 }

@@ -1,4 +1,4 @@
-import type { AppUser, Backend, BasePublicada, Papel } from './types'
+import type { AppUser, Backend, BasePublicada, FonteOnline, Papel } from './types'
 
 /*
  * Modo demonstração: usado sempre que o Supabase não está configurado (no `npm run dev` e no site
@@ -10,6 +10,7 @@ import type { AppUser, Backend, BasePublicada, Papel } from './types'
 
 const USERS_KEY = 'rastreio-whatsapp.demo.users'
 const SESSION_KEY = 'rastreio-whatsapp.demo.session'
+const FONTE_KEY = 'rastreio-whatsapp.demo.fonte'
 
 interface DemoUser extends AppUser {
   senha: string
@@ -81,6 +82,17 @@ function baseDb<T>(mode: IDBTransactionMode, op: (store: IDBObjectStore) => IDBR
 
 // Contas salvas antes dos campos empresa, insights e visaoGeral existirem: sem empresa, vendo tudo.
 const strip = ({ senha: _senha, ...u }: DemoUser): AppUser => ({ ...u, empresa: u.empresa ?? '', insights: u.insights ?? null, visaoGeral: u.visaoGeral ?? null })
+
+interface FonteSalva {
+  url: string
+  intervaloSeg: number
+  definidaEm: string
+}
+
+function readFonte(): FonteOnline | null {
+  const f = read<FonteSalva | null>(FONTE_KEY, null)
+  return f && typeof f.url === 'string' && f.url ? { url: f.url, intervaloSeg: Number(f.intervaloSeg) || 120, definidaEm: new Date(f.definidaEm) } : null
+}
 
 export function createDemoBackend(): Backend {
   let users: DemoUser[] = read(USERS_KEY, SEED)
@@ -197,6 +209,9 @@ export function createDemoBackend(): Backend {
     },
 
     async loadBase() {
+      // Planilha online definida pelo admin: vale para todos, antes de qualquer arquivo publicado.
+      const fonte = readFonte()
+      if (fonte) return { text: '', fileName: '', clinicPhones: [], refTime: null, publishedAt: null, fonte }
       if (published) return published
       published = (await baseDb<BasePublicada>('readonly', (st) => st.get(BASE_KEY))) ?? null
       if (published) return published
@@ -211,12 +226,18 @@ export function createDemoBackend(): Backend {
         clinicPhones: [],
         refTime: null,
         publishedAt: null,
+        fonte: null,
       }
+    },
+
+    async setSource(fonte) {
+      requireAdmin()
+      write(FONTE_KEY, fonte ? { url: fonte.url, intervaloSeg: fonte.intervaloSeg, definidaEm: new Date().toISOString() } : null)
     },
 
     async publishBase(p) {
       requireAdmin()
-      published = { text: p.text, fileName: p.fileName, clinicPhones: p.clinicPhones, refTime: p.refTime, publishedAt: new Date() }
+      published = { text: p.text, fileName: p.fileName, clinicPhones: p.clinicPhones, refTime: p.refTime, publishedAt: new Date(), fonte: null }
       // Se o navegador não guardar, a publicação ainda vale até recarregar a página.
       await baseDb('readwrite', (st) => st.put(published, BASE_KEY))
     },

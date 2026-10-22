@@ -1,5 +1,8 @@
 export type Direction = 'Recebida' | 'Enviada'
 
+/** Temperatura do lead, como vem da coluna Temperatura da planilha (frio, morno, quente). */
+export type Temperature = 'frio' | 'morno' | 'quente'
+
 export interface Message {
   id: number
   at: Date
@@ -14,6 +17,10 @@ export interface Message {
   isMedia: boolean
   statusManual: string
   convKey: string
+  /** Valor bruto da coluna Temperatura ('' quando a planilha não tem a coluna ou a célula está vazia). */
+  temperature: string
+  /** Valor bruto da coluna Anúncio ('' quando a planilha não tem a coluna ou a célula está vazia). */
+  ad: string
 }
 
 export type Status =
@@ -43,6 +50,9 @@ export type Stage =
 
 export type Channel = 'Anúncio (CTA)' | 'Instagram' | 'Prospecção ativa' | 'Orgânico / outro'
 
+/** De onde veio o nome do anúncio: da coluna da planilha ou da mensagem padrão com que o lead chegou. */
+export type AdSource = 'planilha' | 'mensagem' | ''
+
 export interface Conversation {
   key: string
   phone: string
@@ -62,6 +72,11 @@ export interface Conversation {
   procedure: string
   channel: Channel
   stage: Stage
+  /** Temperatura atual do lead (último valor preenchido na planilha); null = sem temperatura. */
+  temperature: Temperature | null
+  /** Anúncio que trouxe o lead; '' = não identificado. */
+  ad: string
+  adSource: AdSource
   awaitingReply: boolean
   awaitingHours: number
   silentHours: number // horas desde a última msg da clínica sem retorno do lead
@@ -85,6 +100,14 @@ export interface Filters {
   channel: string // 'all' | Channel
   line: string // 'all' | 'none' | número da empresa
   cliente: string // 'all' | id do cliente (lib/clients); só o administrador usa
+  temperature: string // 'all' | Temperature | TEMPERATURE_NONE
+  ad: string // 'all' | nome do anúncio | AD_NONE
+}
+
+/** Nomes reais das colunas opcionais encontradas na planilha (undefined = a planilha não tem a coluna). */
+export interface ExtraColumns {
+  temperature?: string
+  ad?: string
 }
 
 export interface Dataset {
@@ -94,4 +117,9 @@ export interface Dataset {
   refTime: Date // última mensagem da base inteira (mesma referência para todos os usuários)
   loadedAt: Date
   publishedAt: Date | null
+  /** arquivo = CSV publicado pelo administrador; online = planilha lida pela internet em intervalos. */
+  origem: 'arquivo' | 'online'
+  /** Última leitura da planilha online. */
+  fetchedAt: Date | null
+  columns: ExtraColumns
 }

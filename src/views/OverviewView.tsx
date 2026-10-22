@@ -1,10 +1,12 @@
-import { useMemo } from 'react'
-import { AlertCircle, Inbox, Send, Tags, Timer, UserPlus, Users } from 'lucide-react'
-import type { Conversation, Message } from '../lib/types'
+import { useMemo, useState } from 'react'
+import { AlertCircle, Flame, Inbox, Send, Tags, Timer, UserPlus, Users } from 'lucide-react'
+import type { Conversation, ExtraColumns, Message } from '../lib/types'
 import type { MetaMap } from '../lib/storage'
 import type { Palette } from '../theme'
 import {
+  AD_METRICS,
   LINE_NONE,
+  adSummary,
   awaitingList,
   countBy,
   leadConversations,
@@ -13,10 +15,14 @@ import {
   median,
   messagesPerDay,
   newLeadsPerWeek,
+  rankAds,
   shareWithin,
+  temperatureCounts,
 } from '../lib/analytics'
+import type { AdMetric } from '../lib/analytics'
 import { fmtDateKey, fmtHours, fmtInt, fmtLine, fmtMinutes, fmtPct, fromDateKey, toDateKey } from '../lib/format'
 import { STAGE_LABEL, STAGE_ORDER, STATUS_LABEL, STATUS_ORDER } from '../lib/status'
+import { TEMPERATURE_LABEL, TEMPERATURE_NONE_LABEL } from '../lib/temperature'
 import type { OverviewId } from '../lib/overview'
 import { StatTile } from '../components/StatTile'
 import { ChartCard } from '../components/ChartCard'
@@ -24,6 +30,7 @@ import { Legend } from '../components/ChartTooltip'
 import { TwoSeriesLine } from '../components/charts/TwoSeriesLine'
 import { ColumnBars } from '../components/charts/ColumnBars'
 import { HBars } from '../components/charts/HBars'
+import { StackedHBars } from '../components/charts/StackedHBars'
 import { StatusBadge } from '../components/StatusBadge'
 import { useLineNames } from '../lineNames'
 
@@ -36,6 +43,8 @@ interface Props {
   clinicPhones: string[]
   attendants: Map<string, string[]>
   activeLine: string
+  /** Colunas opcionais encontradas na planilha (Temperatura, Anúncio), para explicar blocos vazios. */
+  columns: ExtraColumns
   /** Blocos que esta pessoa vê (o administrador escolhe por usuário na aba Usuários). */
   visible: Set<OverviewId>
   /** Só para o administrador: nome do cliente dono de cada número, para a tabela por número. */
@@ -44,13 +53,27 @@ interface Props {
   onOpenConv: (key: string) => void
 }
 
-const KPIS: OverviewId[] = ['leads', 'novos-leads', 'recebidas', 'enviadas', 'primeira-resposta', 'aguardando-resposta', 'sem-status']
-const CARDS: OverviewId[] = ['atendimento-numero', 'mensagens-dia', 'leads-semana', 'procedimentos', 'estagio', 'status-manual', 'aguardando']
+const KPIS: OverviewId[] = ['leads', 'novos-leads', 'recebidas', 'enviadas', 'primeira-resposta', 'aguardando-resposta', 'sem-status', 'leads-quentes']
+const CARDS: OverviewId[] = ['atendimento-numero', 'mensagens-dia', 'leads-semana', 'procedimentos', 'estagio', 'status-manual', 'temperatura', 'anuncios', 'aguardando']
 
-export function OverviewView({ convs, msgs, range, meta, palette, clinicPhones, attendants, activeLine, visible, clientOf, onFilterLine, onOpenConv }: Props) {
+const AD_TOP = 10
+
+/** Cor de cada linha do gráfico de temperatura, pelo rótulo. */
+export function temperatureColors(palette: Palette, names: string[]): string[] {
+  const byLabel: Record<string, string> = {
+    [TEMPERATURE_LABEL.quente]: palette.temperature.quente,
+    [TEMPERATURE_LABEL.morno]: palette.temperature.morno,
+    [TEMPERATURE_LABEL.frio]: palette.temperature.frio,
+    [TEMPERATURE_NONE_LABEL]: palette.temperature.none,
+  }
+  return names.map((n) => byLabel[n] ?? palette.series1)
+}
+
+export function OverviewView({ convs, msgs, range, meta, palette, clinicPhones, attendants, activeLine, columns, visible, clientOf, onFilterLine, onOpenConv }: Props) {
   const multiLine = clinicPhones.length > 1
   const show = (id: OverviewId) => visible.has(id)
   const { label, isRenamed } = useLineNames()
+  const [adMetric, setAdMetric] = useState<AdMetric>('leads')
   const leads = useMemo(() => leadConversations(convs, meta), [convs, meta])
   const newLeads = useMemo(
     () =>
@@ -84,12 +107,32 @@ export function OverviewView({ convs, msgs, range, meta, palette, clinicPhones, 
   )
   const multiLineConvs = useMemo(() => leads.filter((c) => c.lines.length > 1).length, [leads])
 
+  // Temperatura (coluna da planilha) e anúncios (coluna da planilha ou mensagem inicial do anúncio).
+  const hasTemperature = useMemo(() => leads.some((c) => c.temperature), [leads])
+  const hot = leads.filter((c) => c.temperature === 'quente').length
+  const warm = leads.filter((c) => c.temperature === 'morno').length
+  const cold = leads.filter((c) => c.temperature === 'frio').length
+  const tempRows = useMemo(() => (hasTemperature ? temperatureCounts(leads) : []), [hasTemperature, leads])
+  const adRows = useMemo(() => rankAds(adSummary(leads, meta), adMetric), [leads, meta, adMetric])
+  const adTop = useMemo(() => adRows.slice(0, AD_TOP).map((r) => ({ ...r, name: r.ad })), [adRows])
+  const noAd = leads.length - adRows.reduce((s, r) => s + r.leads, 0)
+  const totalSales = adRows.reduce((s, r) => s + r.vendas, 0)
+  const fromSheet = adRows.some((r) => r.source === 'planilha')
+  const metric = AD_METRICS.find((m) => m.id === adMetric) ?? AD_METRICS[0]
+  const tempSeries = [
+    { key: 'quente', label: TEMPERATURE_LABEL.quente, color: palette.temperature.quente },
+    { key: 'morno', label: TEMPERATURE_LABEL.morno, color: palette.temperature.morno },
+    { key: 'frio', label: TEMPERATURE_LABEL.frio, color: palette.temperature.frio },
+    { key: 'semTemperatura', label: TEMPERATURE_NONE_LABEL, color: palette.temperature.none },
+  ]
+
   const series = [
     { key: 'recebidas', label: 'Recebidas (leads)', color: palette.series1 },
     { key: 'enviadas', label: 'Enviadas (clínica)', color: palette.series2 },
   ]
 
-  const anyKpi = KPIS.some(show)
+  // Indicador de leads quentes só faz sentido quando a planilha traz temperatura.
+  const anyKpi = KPIS.some((id) => show(id) && (id !== 'leads-quentes' || hasTemperature))
   // A tabela por número só existe com mais de um número liberado; sem isso, não conta como bloco visível.
   const anyCard = CARDS.some((id) => show(id) && (id !== 'atendimento-numero' || multiLine))
 
@@ -135,6 +178,15 @@ export function OverviewView({ convs, msgs, range, meta, palette, clinicPhones, 
           )}
           {show('sem-status') && (
             <StatTile icon={<Tags size={14} />} label="Sem status manual" value={fmtInt(noStatus)} hint={leads.length ? `${fmtPct(1 - noStatus / leads.length)} dos leads já classificados` : '—'} />
+          )}
+          {show('leads-quentes') && hasTemperature && (
+            <StatTile
+              icon={<Flame size={14} />}
+              label="Leads quentes"
+              value={fmtInt(hot)}
+              hint={`${fmtPct(leads.length ? hot / leads.length : NaN)} dos leads · ${fmtInt(warm)} mornos · ${fmtInt(cold)} frios`}
+              tone={hot ? 'good' : undefined}
+            />
           )}
         </div>
       )}
@@ -216,6 +268,63 @@ export function OverviewView({ convs, msgs, range, meta, palette, clinicPhones, 
             </section>
           )}
 
+          {show('anuncios') && (
+            <div className="span-2">
+              <ChartCard
+                title="Anúncios"
+                subtitle={
+                  fromSheet
+                    ? 'Leads por anúncio de origem (coluna Anúncio da planilha), com a temperatura, os agendamentos e as vendas de cada um'
+                    : 'Leads por anúncio de origem, identificado pela mensagem padrão com que o lead chegou; adicione a coluna Anúncio na planilha para usar o nome exato'
+                }
+                rows={adRows}
+                columns={[
+                  { key: 'ad', label: 'Anúncio' },
+                  { key: 'leads', label: 'Leads', numeric: true },
+                  { key: 'quente', label: 'Quentes', numeric: true },
+                  { key: 'morno', label: 'Mornos', numeric: true },
+                  { key: 'frio', label: 'Frios', numeric: true },
+                  { key: 'agendados', label: 'Agendados', numeric: true },
+                  { key: 'vendas', label: 'Vendas', numeric: true },
+                ]}
+                emptyText={
+                  columns.ad
+                    ? 'Nenhum lead com anúncio preenchido no período selecionado.'
+                    : 'Nenhum anúncio identificado: adicione a coluna Anúncio na planilha (de qual anúncio cada lead veio) ou use a mensagem padrão do anúncio no WhatsApp.'
+                }
+                legend={adMetric === 'leads' && hasTemperature ? <Legend items={tempSeries} mark="rect" /> : undefined}
+                actions={
+                  <label className="control sm" title="Ordenar os anúncios pela métrica">
+                    <select aria-label="Ordenar anúncios por" value={adMetric} onChange={(e) => setAdMetric(e.target.value as AdMetric)}>
+                      {AD_METRICS.map((m) => (
+                        <option key={m.id} value={m.id} disabled={!hasTemperature && (m.id === 'quente' || m.id === 'morno' || m.id === 'frio')}>
+                          {m.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                }
+              >
+                {adMetric === 'leads' && hasTemperature ? (
+                  <StackedHBars data={adTop} nameKey="name" series={tempSeries} totalKey="leads" palette={palette} labelWidth={260} />
+                ) : (
+                  <HBars data={adTop.map((r) => ({ name: r.name, value: r[adMetric] as number }))} label={metric.short} palette={palette} labelWidth={260} />
+                )}
+                {adMetric === 'vendas' && totalSales === 0 && (
+                  <div className="callout" style={{ marginTop: 8 }}>
+                    Nenhuma venda registrada no período. Marque as conversas que viraram venda com o status <b>Convertido</b> (na aba Conversas ou na coluna status_manual da
+                    planilha) para o ranking de vendas funcionar.
+                  </div>
+                )}
+                <p className="small muted" style={{ marginTop: 8 }}>
+                  {adRows.length > AD_TOP ? `${AD_TOP} de ${fmtInt(adRows.length)} anúncios no gráfico (a tabela tem todos). ` : ''}
+                  {noAd > 0 ? `${fmtInt(noAd)} ${noAd === 1 ? 'lead sem anúncio identificado' : 'leads sem anúncio identificado'}. ` : ''}
+                  Agendados = agendamento ou pagamento sinalizado na conversa, ou status Agendado/Convertido. Vendas = conversas com status Convertido.
+                </p>
+              </ChartCard>
+            </div>
+          )}
+
           {show('mensagens-dia') && (
             <div className="span-2">
               <ChartCard
@@ -259,6 +368,25 @@ export function OverviewView({ convs, msgs, range, meta, palette, clinicPhones, 
                 directLabels
                 titleFormatter={(l) => `Semana de ${String(l)}`}
               />
+            </ChartCard>
+          )}
+
+          {show('temperatura') && (
+            <ChartCard
+              title="Temperatura dos leads"
+              subtitle="Frio, morno ou quente, conforme a coluna Temperatura da planilha"
+              rows={tempRows}
+              columns={[
+                { key: 'name', label: 'Temperatura' },
+                { key: 'value', label: 'Leads', numeric: true },
+              ]}
+              emptyText={
+                columns.temperature
+                  ? 'Nenhum lead com temperatura preenchida no período selecionado.'
+                  : 'A planilha não tem a coluna Temperatura. Adicione uma coluna com esse nome e preencha com frio, morno ou quente.'
+              }
+            >
+              <HBars data={tempRows} label="Leads" palette={palette} colors={temperatureColors(palette, tempRows.map((r) => r.name))} />
             </ChartCard>
           )}
 

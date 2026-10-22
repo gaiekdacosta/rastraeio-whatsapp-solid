@@ -10,12 +10,15 @@ export const OVERVIEW = [
   { id: 'primeira-resposta', label: 'Mediana da 1ª resposta', group: 'Indicadores' },
   { id: 'aguardando-resposta', label: 'Aguardando resposta da clínica', group: 'Indicadores' },
   { id: 'sem-status', label: 'Sem status manual', group: 'Indicadores' },
+  { id: 'leads-quentes', label: 'Leads quentes (só com a coluna Temperatura na planilha)', group: 'Indicadores' },
   { id: 'atendimento-numero', label: 'Atendimento por número (só com mais de um número liberado)', group: 'Gráficos e tabelas' },
   { id: 'mensagens-dia', label: 'Mensagens por dia', group: 'Gráficos e tabelas' },
   { id: 'leads-semana', label: 'Novos leads por semana', group: 'Gráficos e tabelas' },
   { id: 'procedimentos', label: 'Procedimentos de interesse', group: 'Gráficos e tabelas' },
   { id: 'estagio', label: 'Estágio inferido das conversas', group: 'Gráficos e tabelas' },
   { id: 'status-manual', label: 'Status manual', group: 'Gráficos e tabelas' },
+  { id: 'temperatura', label: 'Temperatura dos leads (frio, morno, quente)', group: 'Gráficos e tabelas' },
+  { id: 'anuncios', label: 'Anúncios: ranking por leads, temperatura, agendamentos e vendas', group: 'Gráficos e tabelas' },
   { id: 'aguardando', label: 'Leads aguardando resposta da clínica', group: 'Listas de leads' },
 ] as const
 

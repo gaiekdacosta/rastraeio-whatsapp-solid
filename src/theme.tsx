@@ -23,12 +23,19 @@ export interface Palette {
   warning: string
   serious: string
   critical: string
+  /** Temperatura do lead, do frio ao quente (rampa ordinal quente validada para cada superfície). */
+  temperature: { frio: string; morno: string; quente: string; none: string }
 }
 
 /* Rampas validadas com scripts/validate_palette.js (--ordinal) para cada superfície. */
 const ORDINAL: Record<Resolved, string[]> = {
   light: ['#86b6ef', '#5598e7', '#2a78d6', '#1c5cab', '#0d366b'],
   dark: ['#184f95', '#3987e5', '#6da7ec', '#9ec5f4', '#cde2fb'],
+}
+/* Temperatura (ordinal, um matiz quente): no claro o quente é o mais escuro; no escuro, o mais claro. */
+const TEMPERATURE: Record<Resolved, { frio: string; morno: string; quente: string }> = {
+  light: { frio: '#f2a06e', morno: '#d9541f', quente: '#8c2a0e' },
+  dark: { frio: '#9a3a14', morno: '#e2602a', quente: '#f7b58f' },
 }
 /* Sequencial: um matiz, claro→escuro; no escuro a âncora inverte (perto de zero recua para a superfície). */
 const SEQUENTIAL: Record<Resolved, string[]> = {
@@ -59,6 +66,7 @@ function buildPalette(mode: Resolved): Palette {
     warning: readVar('--status-warning'),
     serious: readVar('--status-serious'),
     critical: readVar('--status-critical'),
+    temperature: { ...TEMPERATURE[mode], none: readVar('--baseline') },
   }
 }
 
@@ -67,6 +75,8 @@ interface ThemeCtx {
   resolved: Resolved
   setPref: (p: ThemePref) => void
   palette: Palette
+  /** Força um tema temporariamente (o relatório para PDF é sempre claro); null volta à preferência. */
+  setOverride: (mode: Resolved | null) => void
 }
 
 const Ctx = createContext<ThemeCtx | null>(null)
@@ -82,7 +92,8 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     return () => mq.removeEventListener('change', handler)
   }, [])
 
-  const resolved: Resolved = pref === 'system' ? (osDark ? 'dark' : 'light') : pref
+  const [override, setOverride] = useState<Resolved | null>(null)
+  const resolved: Resolved = override ?? (pref === 'system' ? (osDark ? 'dark' : 'light') : pref)
   const [palette, setPalette] = useState<Palette>(() => buildPalette(resolved))
 
   useLayoutEffect(() => {
@@ -95,7 +106,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     saveTheme(p)
   }, [])
 
-  const value = useMemo(() => ({ pref, resolved, setPref, palette }), [pref, resolved, setPref, palette])
+  const value = useMemo(() => ({ pref, resolved, setPref, palette, setOverride }), [pref, resolved, setPref, palette])
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>
 }
 

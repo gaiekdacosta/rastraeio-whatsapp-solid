@@ -1,6 +1,7 @@
-import type { Channel, Conversation, Filters, Message, Stage, Status } from './types'
+import type { AdSource, Channel, Conversation, Filters, Message, Stage, Status, Temperature } from './types'
 import type { MetaMap } from './storage'
 import { FINAL_STATUSES } from './status'
+import { TEMPERATURE_NONE, TEMPERATURE_ORDER, parseTemperature, temperatureLabel } from './temperature'
 import { fmtShortDate, fromDateKey, isoWeekKey, toDateKey } from './format'
 
 /* ------------------------------------------------------------------ */
@@ -94,6 +95,63 @@ export function isGroupId(phone: string): boolean {
 }
 
 /* ------------------------------------------------------------------ */
+/* Temperatura e anúncio                                               */
+/* ------------------------------------------------------------------ */
+
+/** Valor do filtro de anúncio para leads sem anúncio identificado. */
+export const AD_NONE = 'none'
+export const AD_NONE_LABEL = 'Sem anúncio'
+
+const normText = (s: string) => s.toLowerCase().replace(/\s+/g, ' ').trim()
+
+/** Mensagem inicial que chega igual de muitos leads é o texto padrão de um anúncio (botão do WhatsApp). */
+const AD_TEMPLATE_MIN_LEADS = 5
+const AD_TEMPLATE_MIN_CHARS = 20
+const AD_NAME_MAX = 70
+
+function shorten(s: string): string {
+  const t = s.replace(/\s+/g, ' ').trim()
+  return t.length > AD_NAME_MAX ? `${t.slice(0, AD_NAME_MAX - 1)}…` : t
+}
+
+/** Mensagem padrão sem a saudação do começo ("Olá! Quero aproveitar…" → "Quero aproveitar…"), para os nomes não começarem todos iguais. */
+const GREETING_RE = /^(?:ol[áa]|oi|opa|e a[ií]|bom dia|boa tarde|boa noite|tudo bem\??)[\s,.!?]*/i
+function templateName(text: string): string {
+  const t = text.replace(/\s+/g, ' ').trim()
+  const rest = t.replace(GREETING_RE, '').replace(GREETING_RE, '')
+  return shorten(rest.length >= 10 ? rest[0].toUpperCase() + rest.slice(1) : t)
+}
+
+/**
+ * Anúncio do lead: a coluna Anúncio da planilha (último valor preenchido) ou, sem ela, a mensagem padrão
+ * com que o lead chegou: a frase do CTA ("tenho interesse no…") ou, se a primeira mensagem é idêntica à
+ * de vários outros leads, o texto inteiro.
+ */
+function inferAd(msgs: Message[], firstReceived: Message | null, templates: Map<string, number>): { ad: string; adSource: AdSource } {
+  let fromSheet = ''
+  for (const m of msgs) if (m.ad) fromSheet = m.ad
+  if (fromSheet) return { ad: shorten(fromSheet), adSource: 'planilha' }
+  if (firstReceived && !firstReceived.isMedia) {
+    const cta = firstReceived.text.match(CTA_RE)
+    if (cta) return { ad: titleCase(cta[1].trim()), adSource: 'mensagem' }
+    const key = normText(firstReceived.text)
+    if (key.length >= AD_TEMPLATE_MIN_CHARS && (templates.get(key) ?? 0) >= AD_TEMPLATE_MIN_LEADS)
+      return { ad: templateName(firstReceived.text), adSource: 'mensagem' }
+  }
+  return { ad: '', adSource: '' }
+}
+
+/** Temperatura atual do lead: o último valor preenchido na coluna Temperatura entre as linhas da conversa. */
+function inferTemperature(msgs: Message[]): Temperature | null {
+  let t: Temperature | null = null
+  for (const m of msgs) {
+    const v = parseTemperature(m.temperature)
+    if (v) t = v
+  }
+  return t
+}
+
+/* ------------------------------------------------------------------ */
 /* Construção das conversas                                            */
 /* ------------------------------------------------------------------ */
 
@@ -155,6 +213,16 @@ export function buildConversations(messages: Message[], refTime: Date, clinicPho
     if (arr) arr.push(m)
     else groups.set(key, [m])
   }
+
+  // Quantas conversas começam com a mesma mensagem: serve para reconhecer o texto padrão de cada anúncio.
+  const templates = new Map<string, number>()
+  groups.forEach((msgs, key) => {
+    if (isGroupId(key)) return
+    const first = msgs.reduce((a, b) => (b.at.getTime() < a.at.getTime() || (b.at.getTime() === a.at.getTime() && b.id < a.id) ? b : a))
+    if (first.direction !== 'Recebida' || first.isMedia) return
+    const k = normText(first.text)
+    if (k.length >= AD_TEMPLATE_MIN_CHARS) templates.set(k, (templates.get(k) ?? 0) + 1)
+  })
 
   const convs: Conversation[] = []
   groups.forEach((msgs, key) => {
@@ -224,6 +292,8 @@ export function buildConversations(messages: Message[], refTime: Date, clinicPho
       procedure: inferProcedure(firstReceived, received, sent),
       channel: inferChannel(firstReceived, received, startedBy),
       stage: inferStage(msgs, received, sent),
+      temperature: inferTemperature(msgs),
+      ...inferAd(msgs, firstReceived, templates),
       awaitingReply: last.direction === 'Recebida',
       awaitingHours: last.direction === 'Recebida' ? hoursSinceLast : 0,
       silentHours: last.direction === 'Enviada' ? hoursSinceLast : 0,
@@ -287,6 +357,8 @@ export function applyFilters(
     if (filters.procedure !== 'all' && c.procedure !== filters.procedure) continue
     if (filters.channel !== 'all' && c.channel !== filters.channel) continue
     if (filters.line !== 'all' && c.line !== (filters.line === LINE_NONE ? '' : filters.line)) continue
+    if (filters.temperature !== 'all' && (c.temperature ?? TEMPERATURE_NONE) !== filters.temperature) continue
+    if (filters.ad !== 'all' && (c.ad || AD_NONE) !== filters.ad) continue
     const st = statusOf(c, meta)
     if (filters.status === 'sem_status' ? st !== undefined : filters.status !== 'all' && st !== filters.status) continue
     if (!c.messages.some((m) => inRange(m.dateKey))) continue
@@ -480,14 +552,82 @@ export function scheduleRateBy(leads: Conversation[], meta: MetaMap, fn: (c: Con
     const k = fn(c)
     const e = map.get(k) ?? { total: 0, hits: 0 }
     e.total++
-    const st = statusOf(c, meta)
-    if (st === 'agendado' || st === 'convertido' || STAGE_RANK[c.stage] >= 4) e.hits++
+    if (isScheduled(c, meta)) e.hits++
     map.set(k, e)
   }
   return [...map.entries()]
     .filter(([, v]) => v.total >= minTotal)
     .map(([name, v]) => ({ name, total: v.total, hits: v.hits, rate: v.hits / v.total }))
     .sort((a, b) => b.rate - a.rate)
+}
+
+/** Agendou: status Agendado/Convertido ou agendamento/pagamento sinalizado na conversa. */
+export function isScheduled(c: Conversation, meta: MetaMap): boolean {
+  const st = statusOf(c, meta)
+  return st === 'agendado' || st === 'convertido' || STAGE_RANK[c.stage] >= 4
+}
+
+/**
+ * Venda: só o status manual Convertido (dado na aba Conversas ou vindo da coluna status_manual da planilha).
+ * "Pagamento sinalizado" é heurística e fica fora: num relatório para o cliente, venda tem que ser confirmada.
+ */
+export function isSale(c: Conversation, meta: MetaMap): boolean {
+  return statusOf(c, meta) === 'convertido'
+}
+
+/** Leads por temperatura, do mais quente ao mais frio, mais "Sem temperatura" no fim (só linhas com valor). */
+export function temperatureCounts(leads: Conversation[]): NamedCount[] {
+  const rows = TEMPERATURE_ORDER.map((t) => ({ name: temperatureLabel(t), value: leads.filter((c) => c.temperature === t).length }))
+  rows.push({ name: temperatureLabel(null), value: leads.filter((c) => !c.temperature).length })
+  return rows.filter((r) => r.value > 0)
+}
+
+export interface AdRow {
+  ad: string
+  source: AdSource
+  leads: number
+  frio: number
+  morno: number
+  quente: number
+  semTemperatura: number
+  agendados: number
+  vendas: number
+  [key: string]: string | number
+}
+
+export type AdMetric = 'leads' | 'quente' | 'morno' | 'frio' | 'agendados' | 'vendas'
+
+export const AD_METRICS: { id: AdMetric; label: string; short: string }[] = [
+  { id: 'leads', label: 'Mais leads', short: 'Leads' },
+  { id: 'quente', label: 'Mais leads quentes', short: 'Quentes' },
+  { id: 'morno', label: 'Mais leads mornos', short: 'Mornos' },
+  { id: 'frio', label: 'Mais leads frios', short: 'Frios' },
+  { id: 'agendados', label: 'Mais agendamentos', short: 'Agendados' },
+  { id: 'vendas', label: 'Mais vendas', short: 'Vendas' },
+]
+
+/** Uma linha por anúncio (leads sem anúncio ficam de fora), sem ordenação. */
+export function adSummary(leads: Conversation[], meta: MetaMap): AdRow[] {
+  const map = new Map<string, AdRow>()
+  for (const c of leads) {
+    if (!c.ad) continue
+    let r = map.get(c.ad)
+    if (!r) {
+      r = { ad: c.ad, source: c.adSource, leads: 0, frio: 0, morno: 0, quente: 0, semTemperatura: 0, agendados: 0, vendas: 0 }
+      map.set(c.ad, r)
+    }
+    r.leads++
+    if (c.temperature) r[c.temperature]++
+    else r.semTemperatura++
+    if (isScheduled(c, meta)) r.agendados++
+    if (isSale(c, meta)) r.vendas++
+  }
+  return [...map.values()]
+}
+
+/** Anúncios ordenados pela métrica escolhida (desempate pelo total de leads e pelo nome). */
+export function rankAds(rows: AdRow[], metric: AdMetric): AdRow[] {
+  return [...rows].sort((a, b) => b[metric] - a[metric] || b.leads - a.leads || a.ad.localeCompare(b.ad, 'pt-BR'))
 }
 
 export function manualStatusCounts(convs: Conversation[], meta: MetaMap, order: Status[], labels: Record<Status, string>): NamedCount[] {

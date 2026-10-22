@@ -1,16 +1,17 @@
 import Papa from 'papaparse'
-import type { Conversation, Message } from './types'
+import type { Conversation, ExtraColumns, Message } from './types'
 import type { MetaMap } from './storage'
 import { STATUS_LABEL, STAGE_LABEL } from './status'
+import { temperatureLabel } from './temperature'
 import { fmtDateTime, fmtPhone } from './format'
 import { EXPECTED_COLUMNS } from './parse'
 
-export function buildMessagesCsv(messages: Message[], convs: Conversation[], meta: MetaMap): string {
+export function buildMessagesCsv(messages: Message[], convs: Conversation[], meta: MetaMap, columns: ExtraColumns = {}): string {
   const byKey = new Map(convs.map((c) => [c.key, c]))
   const rows = messages.map((m) => {
     const conv = byKey.get(m.convKey)
     const status = conv ? meta[conv.key]?.status : undefined
-    return {
+    const row: Record<string, string> = {
       Data: m.rawDate,
       Hora: m.time,
       Lead: m.lead,
@@ -21,8 +22,13 @@ export function buildMessagesCsv(messages: Message[], convs: Conversation[], met
       Mensagem: m.text,
       status_manual: status ? STATUS_LABEL[status] : m.statusManual,
     }
+    // As colunas Temperatura e Anúncio voltam com o nome que tinham na planilha.
+    if (columns.temperature) row[columns.temperature] = m.temperature
+    if (columns.ad) row[columns.ad] = m.ad
+    return row
   })
-  return Papa.unparse(rows, { columns: EXPECTED_COLUMNS, newline: '\n' })
+  const cols = [...EXPECTED_COLUMNS, ...[columns.temperature, columns.ad].filter((c): c is string => !!c)]
+  return Papa.unparse(rows, { columns: cols, newline: '\n' })
 }
 
 export function buildLeadsCsv(convs: Conversation[], meta: MetaMap, lineLabel: (line: string) => string = (l) => l): string {
@@ -42,6 +48,9 @@ export function buildLeadsCsv(convs: Conversation[], meta: MetaMap, lineLabel: (
       'Mensagens enviadas': c.sent,
       Procedimento: c.procedure,
       Canal: c.channel,
+      Temperatura: c.temperature ? temperatureLabel(c.temperature) : '',
+      Anúncio: c.ad,
+      'Origem do anúncio': c.adSource === 'planilha' ? 'Planilha' : c.adSource === 'mensagem' ? 'Mensagem inicial' : '',
       'Estágio inferido': STAGE_LABEL[c.stage],
       'Primeira resposta (min)': c.firstResponseMin == null ? '' : Math.round(c.firstResponseMin),
       'Mediana resposta (min)': c.medianResponseMin == null ? '' : Math.round(c.medianResponseMin),

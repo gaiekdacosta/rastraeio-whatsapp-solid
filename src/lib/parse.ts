@@ -1,5 +1,5 @@
 import Papa from 'papaparse'
-import type { Direction, Message } from './types'
+import type { Direction, ExtraColumns, Message } from './types'
 import { toDateKey } from './format'
 
 export const EXPECTED_COLUMNS = [
@@ -15,7 +15,7 @@ export const EXPECTED_COLUMNS = [
 ]
 
 export function parseRows(text: string): Papa.ParseResult<Record<string, string>> {
-  return Papa.parse<Record<string, string>>(text.replace(/^\uFEFF/, ''), {
+  return Papa.parse<Record<string, string>>(text.replace(/^﻿/, ''), {
     header: true,
     skipEmptyLines: true,
     transformHeader: (h) => h.trim(),
@@ -43,17 +43,47 @@ export function convKeyOf(direction: string, phone: string, replyTo: string): st
   return direction === 'Enviada' ? replyTo || phone : phone
 }
 
+const normHeader = (h: string) =>
+  h
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .toLowerCase()
+    .trim()
+
+/**
+ * Colunas opcionais da planilha, reconhecidas pelo nome (sem diferenciar maiúsculas nem acentos):
+ * Temperatura (frio, morno, quente) e Anúncio (de qual anúncio o lead veio; aceita também "Campanha" ou "Ad").
+ */
+export function detectExtraColumns(fields: string[]): ExtraColumns {
+  const known = new Set(EXPECTED_COLUMNS.map(normHeader))
+  const candidates = fields.filter((f) => !known.has(normHeader(f)))
+  const find = (pred: (n: string) => boolean) => candidates.find((f) => pred(normHeader(f)))
+  const temperature =
+    find((n) => n === 'temperatura' || n === 'temp' || n === 'temperature' || n === 'temperatura do lead') ?? find((n) => n.includes('temperatura'))
+  const ad =
+    find((n) => n === 'anuncio' || n === 'anuncios' || n === 'ad' || n === 'ads' || n === 'anuncio de origem') ??
+    find((n) => n.includes('anuncio') || n.startsWith('campanha') || n.includes('ad name') || n === 'adset' || n === 'criativo')
+  const out: ExtraColumns = {}
+  if (temperature) out.temperature = temperature
+  if (ad) out.ad = ad
+  return out
+}
+
 export interface ParseResult {
   messages: Message[]
   clinicPhones: string[]
   skipped: number
   missingColumns: string[]
+  /** Todas as colunas da planilha, na ordem original. */
+  fields: string[]
+  columns: ExtraColumns
 }
 
 export function parseCsv(text: string): ParseResult {
   const res = parseRows(text)
   const fields = res.meta.fields ?? []
   const missingColumns = EXPECTED_COLUMNS.filter((c) => c !== 'status_manual' && !fields.includes(c))
+  const columns = detectExtraColumns(fields)
 
   const raw: Omit<Message, 'convKey'>[] = []
   let skipped = 0
@@ -82,6 +112,8 @@ export function parseCsv(text: string): ParseResult {
       text,
       isMedia: /^\[m[ií]dia\]$/i.test(text),
       statusManual: (row['status_manual'] ?? '').trim(),
+      temperature: columns.temperature ? (row[columns.temperature] ?? '').trim() : '',
+      ad: columns.ad ? (row[columns.ad] ?? '').trim() : '',
     })
   })
 
@@ -96,5 +128,5 @@ export function parseCsv(text: string): ParseResult {
     convKey: convKeyOf(m.direction, m.phone, m.replyTo),
   }))
   messages.sort((a, b) => a.at.getTime() - b.at.getTime() || a.id - b.id)
-  return { messages, clinicPhones, skipped, missingColumns }
+  return { messages, clinicPhones, skipped, missingColumns, fields, columns }
 }
