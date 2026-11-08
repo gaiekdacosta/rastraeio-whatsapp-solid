@@ -3,7 +3,7 @@
 //
 // Corpo (POST, JSON):
 //   { acao: 'criar', email, senha, nome, papel: 'admin' | 'usuario', numeros: string[], empresa?: string,
-//     insights?: string[] | null, visao_geral?: string[] | null }
+//     segmento?: 'clinica' | 'loja' | 'outro', insights?: string[] | null, visao_geral?: string[] | null }
 //   { acao: 'senha', id, senha }
 //   { acao: 'excluir', id }
 import { createClient } from 'npm:@supabase/supabase-js@2'
@@ -13,6 +13,7 @@ const NUMERO_RE = /^([0-9]+|sem-numero)$/
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 const INSIGHT_RE = /^[a-z0-9-]{1,40}$/
 const MAX_EMPRESA = 80
+const SEGMENTOS = ['clinica', 'loja', 'outro']
 
 const cors = {
   'Access-Control-Allow-Origin': '*',
@@ -77,6 +78,8 @@ Deno.serve(async (req) => {
     const papel = body.papel === 'admin' ? 'admin' : 'usuario'
     const numeros = Array.isArray(body.numeros) ? [...new Set(body.numeros.map(String))] : []
     const empresa = String(body.empresa ?? '').trim()
+    // Ausente = o padrão da coluna (clinica). Só vai para o update quando veio, para não exigir a migration de quem não usa.
+    const segmento = body.segmento === undefined ? undefined : String(body.segmento)
     // null (ou ausente) = todos os insights; lista = só os escolhidos pelo administrador.
     const insights = Array.isArray(body.insights) ? [...new Set(body.insights.map(String))] : null
     const visaoGeral = Array.isArray(body.visao_geral) ? [...new Set(body.visao_geral.map(String))] : null
@@ -85,6 +88,7 @@ Deno.serve(async (req) => {
     if (!nome) return erro('Informe o nome.')
     if (numeros.some((n) => !NUMERO_RE.test(n))) return erro('Número inválido na lista de números liberados.')
     if (empresa.length > MAX_EMPRESA) return erro(`O nome da empresa pode ter até ${MAX_EMPRESA} caracteres.`)
+    if (segmento !== undefined && !SEGMENTOS.includes(segmento)) return erro('Tipo de negócio inválido.')
     if (insights?.some((i) => !INSIGHT_RE.test(i))) return erro('Insight inválido na lista de insights.')
     if (visaoGeral?.some((i) => !INSIGHT_RE.test(i))) return erro('Bloco inválido na lista da Visão geral.')
 
@@ -98,7 +102,8 @@ Deno.serve(async (req) => {
     const id = data.user.id
 
     // O perfil (papel 'usuario') é criado pelo gatilho on_auth_user_created; aqui só ajustamos.
-    const { error: perfilError } = await admin.from('perfis').update({ nome, papel, empresa, insights, visao_geral: visaoGeral }).eq('id', id)
+    const perfil = { nome, papel, empresa, insights, visao_geral: visaoGeral, ...(segmento === undefined ? {} : { segmento }) }
+    const { error: perfilError } = await admin.from('perfis').update(perfil).eq('id', id)
     const { error: numerosError } = numeros.length
       ? await admin.from('numeros_usuario').insert(numeros.map((numero) => ({ usuario_id: id, numero })))
       : { error: null }

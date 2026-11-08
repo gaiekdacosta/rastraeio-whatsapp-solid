@@ -1,4 +1,5 @@
 import type { Stage, Status } from './types'
+import { STATUS_FECHADO_LABELS } from './segment'
 
 export const STATUS_ORDER: Status[] = [
   'novo',
@@ -10,6 +11,7 @@ export const STATUS_ORDER: Status[] = [
   'nao_lead',
 ]
 
+/** Rótulos de clínica; o painel mostra os do tipo de negócio (useVocab().status), que só mudam o de "agendado". */
 export const STATUS_LABEL: Record<Status, string> = {
   novo: 'Novo',
   em_atendimento: 'Em atendimento',
@@ -34,8 +36,10 @@ export const STATUS_TONE: Record<Status, Tone> = {
 
 export const FINAL_STATUSES: Status[] = ['agendado', 'convertido', 'perdido', 'nao_lead']
 
+/** Status da coluna status_manual da planilha: aceita o rótulo de qualquer tipo de negócio (Agendado, Pedido feito…) ou o id. */
 export function labelToStatus(label: string): Status | undefined {
   const norm = label.trim().toLowerCase()
+  if (STATUS_FECHADO_LABELS.some((l) => l.toLowerCase() === norm)) return 'agendado'
   const entry = (Object.entries(STATUS_LABEL) as [Status, string][]).find(
     ([key, l]) => l.toLowerCase() === norm || key === norm,
   )
@@ -51,13 +55,3 @@ export const STAGE_ORDER: Stage[] = [
   'agendamento',
   'pagamento',
 ]
-
-export const STAGE_LABEL: Record<Stage, string> = {
-  sem_retorno_lead: 'Prospecção sem retorno',
-  sem_resposta_clinica: 'Sem resposta da clínica',
-  contato: 'Contato inicial',
-  engajado: 'Em conversa',
-  pediu_agendamento: 'Pediu agendamento',
-  agendamento: 'Agendamento sinalizado',
-  pagamento: 'Pagamento sinalizado',
-}

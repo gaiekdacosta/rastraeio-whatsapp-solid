@@ -1,8 +1,5 @@
 export type Direction = 'Recebida' | 'Enviada'
 
-/** Temperatura do lead, como vem da coluna Temperatura da planilha (frio, morno, quente). */
-export type Temperature = 'frio' | 'morno' | 'quente'
-
 export interface Message {
   id: number
   at: Date
@@ -17,8 +14,8 @@ export interface Message {
   isMedia: boolean
   statusManual: string
   convKey: string
-  /** Valor bruto da coluna Temperatura ('' quando a planilha não tem a coluna ou a célula está vazia). */
-  temperature: string
+  /** Valor bruto da coluna Classificação ('' quando a planilha não tem a coluna ou a célula está vazia). */
+  classification: string
   /** Valor bruto da coluna Anúncio ('' quando a planilha não tem a coluna ou a célula está vazia). */
   ad: string
 }
@@ -72,19 +69,20 @@ export interface Conversation {
   procedure: string
   channel: Channel
   stage: Stage
-  /** Temperatura atual do lead (último valor preenchido na planilha); null = sem temperatura. */
-  temperature: Temperature | null
+  /** Classificação atual do lead (último valor preenchido na planilha, já normalizado); null = sem classificação. */
+  classification: string | null
   /** Anúncio que trouxe o lead; '' = não identificado. */
   ad: string
   adSource: AdSource
   awaitingReply: boolean
   awaitingHours: number
-  silentHours: number // horas desde a última msg da clínica sem retorno do lead
+  silentHours: number // horas desde a última msg da empresa sem retorno do lead
   firstResponseMin: number | null
   medianResponseMin: number | null
   responseTimes: number[]
   askedPrice: boolean
-  askedSchedule: boolean
+  /** Pediu agendamento (clínica) ou mostrou intenção de compra (loja): o estágio "intenção" do tipo de negócio. */
+  askedIntent: boolean
   askedAddress: boolean
   csvStatus: string
 }
@@ -100,13 +98,13 @@ export interface Filters {
   channel: string // 'all' | Channel
   line: string // 'all' | 'none' | número da empresa
   cliente: string // 'all' | id do cliente (lib/clients); só o administrador usa
-  temperature: string // 'all' | Temperature | TEMPERATURE_NONE
+  classification: string // 'all' | rótulo da classificação | CLASS_NONE
   ad: string // 'all' | nome do anúncio | AD_NONE
 }
 
 /** Nomes reais das colunas opcionais encontradas na planilha (undefined = a planilha não tem a coluna). */
 export interface ExtraColumns {
-  temperature?: string
+  classification?: string
   ad?: string
 }
 

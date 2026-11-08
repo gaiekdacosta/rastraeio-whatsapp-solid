@@ -25,7 +25,7 @@ function truncate(s: string, n = 24): string {
   return s.length > n ? `${s.slice(0, n - 1)}…` : s
 }
 
-/** Barras horizontais empilhadas (ex.: leads por anúncio, divididos por temperatura), com o total na ponta. */
+/** Barras horizontais empilhadas (ex.: leads por anúncio, divididos por classificação), com o total na ponta. */
 export function StackedHBars({ data, nameKey, series, totalKey, palette, labelWidth = 170, rowHeight = 34 }: Props) {
   const height = Math.max(96, data.length * rowHeight + 12)
   const maxChars = Math.max(12, Math.floor(labelWidth / 6.8))

@@ -1,4 +1,6 @@
 import type { Catalog } from '../lib/blocks'
+import { fillVocab } from '../lib/segment'
+import type { Vocab } from '../lib/segment'
 
 /** Caixas de seleção dos blocos de uma aba, agrupadas. Vai dentro de um `fieldset.field`. */
 export function BlockPicker<Id extends string>({
@@ -6,11 +8,14 @@ export function BlockPicker<Id extends string>({
   value,
   onChange,
   disabled,
+  vocab,
 }: {
   catalog: Catalog<Id>
   value: Set<Id>
   onChange: (next: Set<Id>) => void
   disabled?: boolean
+  /** Termos do tipo de negócio da pessoa, para os rótulos ("Produtos de interesse"). */
+  vocab: Vocab
 }) {
   const allOn = catalog.all.every((id) => value.has(id))
   const toggle = (id: Id) => {
@@ -38,7 +43,7 @@ export function BlockPicker<Id extends string>({
               .map((b) => (
                 <label key={b.id} className="num-check">
                   <input type="checkbox" checked={value.has(b.id)} disabled={disabled} onChange={() => toggle(b.id)} />
-                  <span>{b.label}</span>
+                  <span>{fillVocab(b.label, vocab)}</span>
                 </label>
               ))}
           </div>

@@ -1,4 +1,5 @@
 import type { AppUser, Backend, BasePublicada, FonteOnline, Papel } from './types'
+import { asSegmento } from '../lib/segment'
 
 /*
  * Modo demonstração: usado sempre que o Supabase não está configurado (no `npm run dev` e no site
@@ -22,8 +23,8 @@ export const DEMO_ACCOUNTS = [
 ]
 
 const SEED: DemoUser[] = [
-  { id: 'demo-admin', nome: 'Administrador (demo)', numeros: [], empresa: '', insights: null, visaoGeral: null, ...DEMO_ACCOUNTS[0] },
-  { id: 'demo-usuario', nome: 'Usuário (demo)', numeros: [], empresa: 'Império 085', insights: null, visaoGeral: null, ...DEMO_ACCOUNTS[1] },
+  { id: 'demo-admin', nome: 'Administrador (demo)', numeros: [], empresa: '', segmento: 'clinica', insights: null, visaoGeral: null, ...DEMO_ACCOUNTS[0] },
+  { id: 'demo-usuario', nome: 'Usuário (demo)', numeros: [], empresa: 'Loja Exemplo', segmento: 'loja', insights: null, visaoGeral: null, ...DEMO_ACCOUNTS[1] },
 ]
 
 function read<T>(key: string, fallback: T): T {
@@ -80,8 +81,14 @@ function baseDb<T>(mode: IDBTransactionMode, op: (store: IDBObjectStore) => IDBR
   })
 }
 
-// Contas salvas antes dos campos empresa, insights e visaoGeral existirem: sem empresa, vendo tudo.
-const strip = ({ senha: _senha, ...u }: DemoUser): AppUser => ({ ...u, empresa: u.empresa ?? '', insights: u.insights ?? null, visaoGeral: u.visaoGeral ?? null })
+// Contas salvas antes dos campos empresa, segmento, insights e visaoGeral existirem: sem empresa, clínica, vendo tudo.
+const strip = ({ senha: _senha, ...u }: DemoUser): AppUser => ({
+  ...u,
+  empresa: u.empresa ?? '',
+  segmento: asSegmento(u.segmento),
+  insights: u.insights ?? null,
+  visaoGeral: u.visaoGeral ?? null,
+})
 
 interface FonteSalva {
   url: string
@@ -173,6 +180,7 @@ export function createDemoBackend(): Backend {
           papel: n.papel,
           numeros: [...new Set(n.numeros)],
           empresa: n.empresa.trim(),
+          segmento: asSegmento(n.segmento),
           insights: n.insights && [...new Set(n.insights)],
           visaoGeral: n.visaoGeral && [...new Set(n.visaoGeral)],
         },

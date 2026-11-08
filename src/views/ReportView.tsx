@@ -16,10 +16,12 @@ import {
   newLeadsPerWeek,
   rankAds,
   shareWithin,
-  temperatureCounts,
+  classificationCounts,
+  adValue,
 } from '../lib/analytics'
 import { fmtDateKey, fmtDateTime, fmtInt, fmtMinutes, fmtPct, fromDateKey, toDateKey } from '../lib/format'
-import { TEMPERATURE_LABEL, TEMPERATURE_NONE_LABEL } from '../lib/temperature'
+import { classKey, classPlural } from '../lib/classification'
+import { cap } from '../lib/segment'
 import type { OverviewId } from '../lib/overview'
 import type { InsightId } from '../lib/insights'
 import { SolidMark } from '../components/BrandLogo'
@@ -29,7 +31,9 @@ import { ColumnBars } from '../components/charts/ColumnBars'
 import { HBars } from '../components/charts/HBars'
 import { FunnelBars } from '../components/charts/FunnelBars'
 import { StackedHBars } from '../components/charts/StackedHBars'
-import { temperatureColors } from './OverviewView'
+import { classBarColors, classKpi, classSeries, closedRule } from './OverviewView'
+import { adHighlight, classHighlight } from './InsightsView'
+import { useVocab } from '../vocab'
 
 interface Props {
   convs: Conversation[]
@@ -43,6 +47,8 @@ interface Props {
   scope: string[]
   /** Última mensagem da base: até quando os dados vão. */
   refTime: Date
+  /** Classificações da base inteira, na ordem (e com as cores) do painel. */
+  classes: string[]
   /** Blocos que a pessoa vê no painel; o relatório segue a mesma escolha. */
   overview: Set<OverviewId>
   insights: Set<InsightId>
@@ -52,8 +58,9 @@ interface Props {
 const AD_TOP = 10
 
 /** Relatório imprimível com as métricas principais do período. O botão usa a impressão do navegador ("Salvar como PDF"). */
-export function ReportView({ convs, msgs, range, meta, palette, client, scope, refTime, overview, insights, onClose }: Props) {
+export function ReportView({ convs, msgs, range, meta, palette, client, scope, refTime, classes, overview, insights, onClose }: Props) {
   const { setOverride } = useTheme()
+  const v = useVocab()
 
   // O relatório é sempre claro (vai para o papel/PDF); ao fechar, volta ao tema da pessoa.
   useEffect(() => {
@@ -90,52 +97,42 @@ export function ReportView({ convs, msgs, range, meta, palette, client, scope, r
   const within15 = shareWithin(firstTimes, 15)
   const responseRate = wrote.length ? replied.length / wrote.length : NaN
   const awaiting = awaitingList(leads)
-  const steps = useMemo(() => funnel(leads), [leads])
+  const steps = useMemo(() => funnel(leads, v), [leads, v])
   const scheduledOrPaid = steps[steps.length - 1]?.count ?? 0
   const sales = leads.filter((c) => isSale(c, meta)).length
-  const hasTemperature = leads.some((c) => c.temperature)
-  const hot = leads.filter((c) => c.temperature === 'quente').length
-  const warm = leads.filter((c) => c.temperature === 'morno').length
-  const cold = leads.filter((c) => c.temperature === 'frio').length
-  const tempRows = useMemo(() => (hasTemperature ? temperatureCounts(leads) : []), [hasTemperature, leads])
+  const hasClassification = leads.some((c) => c.classification)
+  const kpiClass = classKpi(leads, classes)
+  const classRows = useMemo(() => (hasClassification ? classificationCounts(leads, classes) : []), [hasClassification, leads, classes])
+  // Na tabela de anúncios, só as classificações que aparecem no recorte (a tabela do PDF não rola de lado).
+  const tableClasses = classes.filter((c) => leads.some((l) => l.classification === c))
   const perDay = useMemo(() => messagesPerDay(msgs, range), [msgs, range])
   const perWeek = useMemo(() => newLeadsPerWeek(leads, range), [leads, range])
   const byProcedure = useMemo(() => countBy(leads, (c) => c.procedure, 8), [leads])
   const byChannel = useMemo(() => countBy(leads, (c) => c.channel), [leads])
   const ads = useMemo(() => rankAds(adSummary(leads, meta), 'leads'), [leads, meta])
   const adTop = ads.slice(0, AD_TOP).map((r) => ({ ...r, name: r.ad }))
-  const topHot = hasTemperature && ads.length ? rankAds(ads, 'quente')[0] : null
-  const topSales = ads.length ? rankAds(ads, 'vendas')[0] : null
+  const stack = hasClassification ? classSeries(palette, classes) : null
 
   const highlights: string[] = []
   if (leads.length) highlights.push(`${fmtInt(leads.length)} conversas de leads no período, ${fmtInt(newLeads.length)} delas iniciadas nele (${fmtInt((newLeads.length / days) * 7)} por semana).`)
   if (Number.isFinite(responseRate)) highlights.push(`${fmtPct(responseRate)} dos leads receberam resposta; mediana da primeira resposta de ${fmtMinutes(firstResp)}${Number.isFinite(within15) ? `, ${fmtPct(within15)} em até 15 minutos` : ''}.`)
-  if (byProcedure[0] && wrote.length) highlights.push(`${byProcedure[0].name} concentra ${fmtPct(byProcedure[0].value / leads.length)} dos leads.`)
-  if (hasTemperature && leads.length) highlights.push(`${fmtPct(hot / leads.length)} dos leads estão quentes, ${fmtPct(warm / leads.length)} mornos e ${fmtPct(cold / leads.length)} frios.`)
-  if (ads[0]) {
-    let line = `O anúncio “${ads[0].ad}” é o que mais gera leads (${fmtInt(ads[0].leads)})`
-    if (topHot && topHot.quente > 0) line += topHot.ad === ads[0].ad ? ` e também leads quentes (${fmtInt(topHot.quente)})` : `; “${topHot.ad}” é o que mais gera leads quentes (${fmtInt(topHot.quente)})`
-    if (topSales && topSales.vendas > 0) line += `; “${topSales.ad}” é o que mais gera vendas (${fmtInt(topSales.vendas)})`
-    highlights.push(`${line}.`)
-  }
-  if (scheduledOrPaid) highlights.push(`${fmtInt(scheduledOrPaid)} leads com agendamento ou pagamento sinalizado${sales ? `, ${fmtInt(sales)} vendas` : ''}.`)
+  const topItem = byProcedure.find((r) => r.name !== 'Não identificado' && r.name !== 'Outros')
+  if (topItem && wrote.length) highlights.push(`${topItem.name} concentra ${fmtPct(topItem.value / leads.length)} dos leads.`)
+  const classLine = hasClassification ? classHighlight(leads, classes) : null
+  if (classLine) highlights.push(classLine)
+  if (ads[0]) highlights.push(adHighlight(ads, hasClassification ? classes : []))
+  if (scheduledOrPaid) highlights.push(`${fmtInt(scheduledOrPaid)} leads com ${v.fechamento} ou pagamento sinalizado${sales ? `, ${fmtInt(sales)} vendas` : ''}.`)
   if (awaiting.length) highlights.push(`${fmtInt(awaiting.length)} leads estão aguardando resposta.`)
 
   const daySeries = [
     { key: 'recebidas', label: 'Recebidas (leads)', color: palette.series1 },
-    { key: 'enviadas', label: 'Enviadas (empresa)', color: palette.series2 },
-  ]
-  const tempSeries = [
-    { key: 'quente', label: TEMPERATURE_LABEL.quente, color: palette.temperature.quente },
-    { key: 'morno', label: TEMPERATURE_LABEL.morno, color: palette.temperature.morno },
-    { key: 'frio', label: TEMPERATURE_LABEL.frio, color: palette.temperature.frio },
-    { key: 'semTemperatura', label: TEMPERATURE_NONE_LABEL, color: palette.temperature.none },
+    { key: 'enviadas', label: `Enviadas (${v.empresa})`, color: palette.series2 },
   ]
 
   const ov = (id: OverviewId) => overview.has(id)
   const ins = (id: InsightId) => insights.has(id)
   const showAds = ov('anuncios') && ads.length > 0
-  const showTemp = ov('temperatura') && hasTemperature
+  const showClass = ov('temperatura') && hasClassification
 
   const kpis: { label: string; value: string; hint?: string }[] = []
   if (ov('leads')) kpis.push({ label: 'Conversas de leads', value: fmtInt(leads.length) })
@@ -145,8 +142,9 @@ export function ReportView({ convs, msgs, range, meta, palette, client, scope, r
   if (ins('indicadores')) kpis.push({ label: 'Taxa de resposta', value: fmtPct(responseRate), hint: `${fmtInt(wrote.length - replied.length)} sem resposta` })
   if (ov('primeira-resposta')) kpis.push({ label: 'Mediana da 1ª resposta', value: fmtMinutes(firstResp), hint: Number.isFinite(within15) ? `${fmtPct(within15)} em até 15 min` : undefined })
   if (ov('aguardando-resposta')) kpis.push({ label: 'Aguardando resposta', value: fmtInt(awaiting.length) })
-  if (ins('indicadores') || ins('funil')) kpis.push({ label: 'Agendamento ou pagamento', value: fmtInt(scheduledOrPaid), hint: sales ? `${fmtInt(sales)} vendas` : undefined })
-  if (ov('leads-quentes') && hasTemperature) kpis.push({ label: 'Leads quentes', value: fmtInt(hot), hint: `${fmtInt(warm)} mornos · ${fmtInt(cold)} frios` })
+  if (ins('indicadores') || ins('funil'))
+    kpis.push({ label: `${cap(v.fechamento)} ou pagamento`, value: fmtInt(scheduledOrPaid), hint: sales ? `${fmtInt(sales)} vendas` : undefined })
+  if (ov('leads-quentes') && hasClassification) kpis.push({ label: kpiClass.title, value: fmtInt(kpiClass.value), hint: kpiClass.hint })
 
   return (
     <div className="report-overlay" role="dialog" aria-modal="true" aria-label="Relatório em PDF">
@@ -226,7 +224,7 @@ export function ReportView({ convs, msgs, range, meta, palette, client, scope, r
           )}
           {ov('procedimentos') && byProcedure.length > 0 && (
             <section className="report-block">
-              <h3>Procedimentos de interesse</h3>
+              <h3>{v.Itens} de interesse</h3>
               <p className="sub">Pela mensagem inicial do anúncio ou por palavras-chave do lead</p>
               <HBars data={byProcedure} label="Leads" palette={palette} rowHeight={26} />
             </section>
@@ -234,16 +232,16 @@ export function ReportView({ convs, msgs, range, meta, palette, client, scope, r
           {ov('mensagens-dia') && (
             <section className="report-block wide">
               <h3>Mensagens por dia</h3>
-              <p className="sub">Recebidas dos leads e enviadas pela empresa</p>
+              <p className="sub">Recebidas dos leads e enviadas pela {v.empresa}</p>
               <Legend items={daySeries} />
               <TwoSeriesLine data={perDay} xKey="label" series={daySeries} palette={palette} height={200} titleFormatter={(_l, row) => (row ? fmtDateKey(String(row.date)) : '')} />
             </section>
           )}
-          {showTemp && (
+          {showClass && (
             <section className="report-block">
-              <h3>Temperatura dos leads</h3>
-              <p className="sub">Frio, morno ou quente, conforme a planilha</p>
-              <HBars data={tempRows} label="Leads" palette={palette} colors={temperatureColors(palette, tempRows.map((r) => r.name))} rowHeight={28} labelWidth={120} />
+              <h3>Classificação dos leads</h3>
+              <p className="sub">Conforme a coluna Classificação da planilha</p>
+              <HBars data={classRows} label="Leads" palette={palette} colors={classBarColors(palette, classes, classRows.map((r) => r.name))} rowHeight={28} labelWidth={120} />
             </section>
           )}
           {ins('canal') && byChannel.length > 0 && (
@@ -264,13 +262,13 @@ export function ReportView({ convs, msgs, range, meta, palette, client, scope, r
             <section className="report-block wide">
               <h3>Anúncios</h3>
               <p className="sub">
-                Leads por anúncio de origem{hasTemperature ? ', divididos por temperatura' : ''}
+                Leads por anúncio de origem{stack ? ', divididos por classificação' : ''}
                 {ads.length > AD_TOP ? ` (${AD_TOP} maiores no gráfico; a tabela tem todos)` : ''}
               </p>
-              {hasTemperature ? (
+              {stack ? (
                 <>
-                  <Legend items={tempSeries} mark="rect" />
-                  <StackedHBars data={adTop} nameKey="name" series={tempSeries} totalKey="leads" palette={palette} labelWidth={240} rowHeight={28} />
+                  <Legend items={stack} mark="rect" />
+                  <StackedHBars data={adTop} nameKey="name" series={stack} totalKey="leads" palette={palette} labelWidth={240} rowHeight={28} />
                 </>
               ) : (
                 <HBars data={adTop.map((r) => ({ name: r.name, value: r.leads }))} label="Leads" palette={palette} labelWidth={240} rowHeight={28} />
@@ -280,14 +278,12 @@ export function ReportView({ convs, msgs, range, meta, palette, client, scope, r
                   <tr>
                     <th>Anúncio</th>
                     <th className="num">Leads</th>
-                    {hasTemperature && (
-                      <>
-                        <th className="num">Quentes</th>
-                        <th className="num">Mornos</th>
-                        <th className="num">Frios</th>
-                      </>
-                    )}
-                    <th className="num">Agendados</th>
+                    {tableClasses.map((c) => (
+                      <th key={c} className="num">
+                        {classPlural(c)}
+                      </th>
+                    ))}
+                    <th className="num">{v.fechados}</th>
                     <th className="num">Vendas</th>
                   </tr>
                 </thead>
@@ -296,13 +292,11 @@ export function ReportView({ convs, msgs, range, meta, palette, client, scope, r
                     <tr key={r.ad}>
                       <td>{r.ad}</td>
                       <td className="num">{fmtInt(r.leads)}</td>
-                      {hasTemperature && (
-                        <>
-                          <td className="num">{fmtInt(r.quente)}</td>
-                          <td className="num">{fmtInt(r.morno)}</td>
-                          <td className="num">{fmtInt(r.frio)}</td>
-                        </>
-                      )}
+                      {tableClasses.map((c) => (
+                        <td key={c} className="num">
+                          {fmtInt(adValue(r, classKey(c)))}
+                        </td>
+                      ))}
                       <td className="num">{fmtInt(r.agendados)}</td>
                       <td className="num">{fmtInt(r.vendas)}</td>
                     </tr>
@@ -316,7 +310,7 @@ export function ReportView({ convs, msgs, range, meta, palette, client, scope, r
         <footer className="report-foot">
           <span>Solid Marketing Digital · Rastreio WhatsApp</span>
           <span>
-            Agendados: agendamento/pagamento sinalizado ou status Agendado/Convertido · Vendas: conversas com status Convertido · Tempos em relação à última mensagem da planilha
+            {closedRule(v)} Tempos em relação à última mensagem da planilha.
           </span>
         </footer>
       </article>

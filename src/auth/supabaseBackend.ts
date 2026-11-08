@@ -1,6 +1,7 @@
 import { createClient, FunctionsHttpError } from '@supabase/supabase-js'
 import type { AppUser, Backend, BasePublicada, FonteOnline, NovoUsuario, Papel, PerfilPatch, Publicacao } from './types'
 import { joinCsv } from '../lib/access'
+import { DEFAULT_SEGMENTO, asSegmento } from '../lib/segment'
 
 const BUCKET = 'conversas'
 const FUNCAO_ADMIN = 'admin-usuarios'
@@ -11,14 +12,20 @@ interface PerfilRow {
   nome: string
   papel: Papel
   empresa: string
+  /** Ausente em bancos sem a migration 20261108173011_segmento.sql. */
+  segmento?: string
   insights: string[] | null
   visao_geral: string[] | null
 }
 
-const PERFIL_COLS = 'id, email, nome, papel, empresa, insights, visao_geral'
+const PERFIL_COLS_SEM_SEGMENTO = 'id, email, nome, papel, empresa, insights, visao_geral'
+const PERFIL_COLS = `${PERFIL_COLS_SEM_SEGMENTO}, segmento`
+
+/** Banco ainda sem a coluna segmento: o painel segue funcionando, todo mundo como clínica (o comportamento de antes). */
+const semSegmento = (e: { message: string } | null) => !!e && /segmento/.test(e.message) && /does not exist|schema cache/i.test(e.message)
 
 /** Linha de perfis → campos do AppUser (sem os números, que vêm de outra tabela). */
-const fromRow = ({ visao_geral, ...p }: PerfilRow): Omit<AppUser, 'numeros'> => ({ ...p, visaoGeral: visao_geral })
+const fromRow = ({ visao_geral, segmento, ...p }: PerfilRow): Omit<AppUser, 'numeros'> => ({ ...p, segmento: asSegmento(segmento), visaoGeral: visao_geral })
 
 /** Patch do app → colunas de perfis. */
 function toRow(patch: PerfilPatch): Record<string, unknown> {
@@ -45,6 +52,8 @@ function dbError(e: { message: string }): Error {
     return new Error('O banco ainda não tem os campos de empresa e insights. Rode a migration 20261010120000_empresa_e_insights.sql no Supabase.')
   if (/column .*visao_geral.* does not exist/i.test(e.message))
     return new Error('O banco ainda não tem o campo da Visão geral por usuário. Rode a migration 20261010160000_visao_geral_por_usuario.sql no Supabase.')
+  if (semSegmento(e))
+    return new Error('O banco ainda não tem o campo do tipo de negócio. Rode a migration 20261108173011_segmento.sql no Supabase.')
   if (/relation .*fonte_planilha.* does not exist|fonte_planilha.*schema cache/i.test(e.message))
     return new Error('O banco ainda não tem a tabela da planilha online. Rode a migration 20261022120000_fonte_planilha.sql no Supabase.')
   return new Error(e.message)
@@ -74,6 +83,12 @@ export function createSupabaseBackend(url: string, key: string): Backend {
     throw new Error(`A Edge Function ${FUNCAO_ADMIN} não respondeu. Confira se ela foi publicada (supabase functions deploy ${FUNCAO_ADMIN}).`)
   }
 
+  async function updatePerfil(id: string, patch: PerfilPatch): Promise<void> {
+    const { data, error } = await sb.from('perfis').update(toRow(patch)).eq('id', id).select('id')
+    if (error) throw dbError(error)
+    if (!data.length) throw new Error('Sem permissão para alterar este usuário.')
+  }
+
   async function removeOldVersions(current: string): Promise<void> {
     const store = sb.storage.from(BUCKET)
     const { data: roots } = await store.list('', { limit: 1000 })
@@ -100,10 +115,9 @@ export function createSupabaseBackend(url: string, key: string): Backend {
       const session = data.session
       if (!session) return null
       const id = session.user.id
-      const [perfil, numeros] = await Promise.all([
-        sb.from('perfis').select(PERFIL_COLS).eq('id', id).maybeSingle<PerfilRow>(),
-        sb.from('numeros_usuario').select('numero').eq('usuario_id', id),
-      ])
+      const lerPerfil = (cols: string) => sb.from('perfis').select(cols).eq('id', id).maybeSingle<PerfilRow>()
+      const [primeiro, numeros] = await Promise.all([lerPerfil(PERFIL_COLS), sb.from('numeros_usuario').select('numero').eq('usuario_id', id)])
+      const perfil = semSegmento(primeiro.error) ? await lerPerfil(PERFIL_COLS_SEM_SEGMENTO) : primeiro
       if (perfil.error) throw dbError(perfil.error)
       if (numeros.error) throw dbError(numeros.error)
       if (!perfil.data) throw new Error('Sua conta existe, mas não tem perfil de acesso. Peça ao administrador para recriá-la.')
@@ -136,10 +150,9 @@ export function createSupabaseBackend(url: string, key: string): Backend {
     },
 
     async listUsers() {
-      const [perfis, numeros] = await Promise.all([
-        sb.from('perfis').select(PERFIL_COLS).order('nome').returns<PerfilRow[]>(),
-        sb.from('numeros_usuario').select('usuario_id, numero'),
-      ])
+      const lerPerfis = (cols: string) => sb.from('perfis').select(cols).order('nome').returns<PerfilRow[]>()
+      const [primeiro, numeros] = await Promise.all([lerPerfis(PERFIL_COLS), sb.from('numeros_usuario').select('usuario_id, numero')])
+      const perfis = semSegmento(primeiro.error) ? await lerPerfis(PERFIL_COLS_SEM_SEGMENTO) : primeiro
       if (perfis.error) throw dbError(perfis.error)
       if (numeros.error) throw dbError(numeros.error)
       const byUser = new Map<string, string[]>()
@@ -148,15 +161,15 @@ export function createSupabaseBackend(url: string, key: string): Backend {
     },
 
     async createUser(u: NovoUsuario) {
-      const { visaoGeral, ...rest } = u
-      await callAdmin({ acao: 'criar', ...rest, visao_geral: visaoGeral })
+      const { visaoGeral, segmento, ...rest } = u
+      // Clínica é o padrão da coluna: não manda, para criar conta funcionar mesmo antes da migration do segmento.
+      const extra = segmento === DEFAULT_SEGMENTO ? {} : { segmento }
+      const criado = (await callAdmin({ acao: 'criar', ...rest, ...extra, visao_geral: visaoGeral })) as { id?: string } | null
+      // Edge Function publicada antes do campo existir ignora o segmento: grava direto no perfil (o admin pode).
+      if (segmento !== DEFAULT_SEGMENTO && criado?.id) await updatePerfil(criado.id, { segmento })
     },
 
-    async updateUser(id, patch) {
-      const { data, error } = await sb.from('perfis').update(toRow(patch)).eq('id', id).select('id')
-      if (error) throw dbError(error)
-      if (!data.length) throw new Error('Sem permissão para alterar este usuário.')
-    },
+    updateUser: updatePerfil,
 
     async setNumbers(id, numeros) {
       const { error } = await sb.rpc('definir_numeros_usuario', { p_usuario: id, p_numeros: numeros })

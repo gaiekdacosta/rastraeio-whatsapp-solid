@@ -1,8 +1,11 @@
-import { Ban, CalendarCheck, CheckCircle2, Clock, Flame, MessageCircle, Snowflake, Sparkles, Thermometer, XCircle } from 'lucide-react'
+import { Ban, CalendarCheck, CheckCircle2, Clock, Flame, Handshake, MessageCircle, ShoppingBag, Snowflake, Sparkles, Tag, Thermometer, XCircle } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
-import type { Stage, Status, Temperature } from '../lib/types'
-import { STAGE_LABEL, STATUS_LABEL, STATUS_TONE } from '../lib/status'
-import { TEMPERATURE_LABEL } from '../lib/temperature'
+import type { Stage, Status } from '../lib/types'
+import { STATUS_TONE } from '../lib/status'
+import type { Segmento } from '../lib/segment'
+import { isScale } from '../lib/classification'
+import type { ScaleClass } from '../lib/classification'
+import { useVocab } from '../vocab'
 
 const ICONS: Record<Status, LucideIcon> = {
   novo: Sparkles,
@@ -14,41 +17,61 @@ const ICONS: Record<Status, LucideIcon> = {
   nao_lead: Ban,
 }
 
+/** Ícone do status "agendado" em cada tipo de negócio (agendamento, pedido, fechamento). */
+const FECHADO_ICON: Record<Segmento, LucideIcon> = {
+  clinica: CalendarCheck,
+  loja: ShoppingBag,
+  outro: Handshake,
+}
+
+function iconOf(status: Status, segmento: Segmento): LucideIcon {
+  return status === 'agendado' ? FECHADO_ICON[segmento] : ICONS[status]
+}
+
 export function StatusBadge({ status, small }: { status?: Status; small?: boolean }) {
+  const v = useVocab()
   const cls = small ? ' sm' : ''
   if (!status) return <span className={`badge muted${cls}`}>Sem status</span>
-  const Icon = ICONS[status]
+  const Icon = iconOf(status, v.segmento)
   return (
     <span className={`badge ${STATUS_TONE[status]}${cls}`}>
       <Icon size={small ? 11 : 12} aria-hidden />
-      {STATUS_LABEL[status]}
+      {v.status[status]}
     </span>
   )
 }
 
-const TEMP_ICONS: Record<Temperature, LucideIcon> = {
-  frio: Snowflake,
-  morno: Thermometer,
-  quente: Flame,
+const SCALE_ICONS: Record<ScaleClass, LucideIcon> = {
+  Frio: Snowflake,
+  Morno: Thermometer,
+  Quente: Flame,
 }
 
-/** Temperatura do lead (coluna Temperatura da planilha). Sem temperatura, não mostra nada. */
-export function TemperatureBadge({ temperature, small }: { temperature: Temperature | null; small?: boolean }) {
-  if (!temperature) return null
-  const Icon = TEMP_ICONS[temperature]
+const SCALE_CLASS: Record<ScaleClass, string> = {
+  Frio: 'temp-frio',
+  Morno: 'temp-morno',
+  Quente: 'temp-quente',
+}
+
+/** Classificação do lead (coluna Classificação da planilha). Sem classificação, não mostra nada. */
+export function ClassificationBadge({ value, small }: { value: string | null; small?: boolean }) {
+  if (!value) return null
+  const Icon = isScale(value) ? SCALE_ICONS[value] : Tag
   return (
-    <span className={`badge temp-${temperature}${small ? ' sm' : ''}`} title="Temperatura do lead, conforme a planilha">
+    <span className={`badge ${isScale(value) ? SCALE_CLASS[value] : 'outline'}${small ? ' sm' : ''}`} title="Classificação do lead, conforme a planilha">
       <Icon size={small ? 11 : 12} aria-hidden />
-      {TEMPERATURE_LABEL[temperature]}
+      {value}
     </span>
   )
 }
 
 export function StageBadge({ stage, small }: { stage: Stage; small?: boolean }) {
-  return <span className={`badge outline${small ? ' sm' : ''}`}>{STAGE_LABEL[stage]}</span>
+  const v = useVocab()
+  return <span className={`badge outline${small ? ' sm' : ''}`}>{v.stage[stage]}</span>
 }
 
 export function StatusIcon({ status, size = 14 }: { status: Status; size?: number }) {
-  const Icon = ICONS[status]
+  const v = useVocab()
+  const Icon = iconOf(status, v.segmento)
   return <Icon size={size} aria-hidden />
 }

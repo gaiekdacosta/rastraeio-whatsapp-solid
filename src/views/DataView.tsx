@@ -8,8 +8,10 @@ import { buildLeadsCsv, buildMessagesCsv, downloadText } from '../lib/export'
 import { parseCsv } from '../lib/parse'
 import { DEFAULT_SHEET_INTERVAL, SHEET_INTERVALS, fetchSheetCsv, isGoogleSheet } from '../lib/sheet'
 import { useLineNames } from '../lineNames'
+import { useVocab } from '../vocab'
 import { fmtDateTime, fmtInt, fmtLine, fmtTime, toDateKey } from '../lib/format'
 import { SEM_NUMERO } from '../lib/access'
+import { SEGMENTO_LABEL } from '../lib/segment'
 import type { LiveInfo } from '../components/FilterBar'
 
 export type PublishState =
@@ -65,6 +67,7 @@ export function DataView({
 }: Props) {
   const inputRef = useRef<HTMLInputElement>(null)
   const { label, isRenamed } = useLineNames()
+  const v = useVocab()
   const [drag, setDrag] = useState(false)
   const [url, setUrl] = useState(source?.url ?? '')
   const [intervalo, setIntervalo] = useState(source?.intervaloSeg ?? DEFAULT_SHEET_INTERVAL)
@@ -85,11 +88,11 @@ export function DataView({
       if (res.missingColumns.length) throw new Error(`A planilha não tem as colunas esperadas: ${res.missingColumns.join(', ')}. Confira se o link aponta para a aba certa.`)
       if (!res.messages.length) throw new Error('A planilha não tem mensagens válidas.')
       await onSaveSource({ url: url.trim(), intervaloSeg: intervalo })
-      const extras = [res.columns.temperature ? `Temperatura (${res.columns.temperature})` : '', res.columns.ad ? `Anúncio (${res.columns.ad})` : ''].filter(Boolean)
+      const extras = [res.columns.classification ? `Classificação (${res.columns.classification})` : '', res.columns.ad ? `Anúncio (${res.columns.ad})` : ''].filter(Boolean)
       setTest({
         status: 'ok',
         summary: `${fmtInt(res.messages.length)} mensagens e ${res.clinicPhones.length} ${res.clinicPhones.length === 1 ? 'número da empresa' : 'números da empresa'}. ${
-          extras.length ? `Colunas extras encontradas: ${extras.join(', ')}.` : 'Sem as colunas Temperatura e Anúncio.'
+          extras.length ? `Colunas extras encontradas: ${extras.join(', ')}.` : 'Sem as colunas Classificação e Anúncio.'
         }`,
       })
     } catch (err) {
@@ -198,7 +201,7 @@ export function DataView({
               <li>Copie o endereço do navegador (com a aba aberta) ou o link publicado e cole acima.</li>
             </ol>
             <p className="small muted">
-              A planilha precisa ter as colunas Data, Hora, Lead, Telefone, Tipo, É resposta, Respondendo para e Mensagem. Se tiver também <b>Temperatura</b> (frio, morno, quente) e{' '}
+              A planilha precisa ter as colunas Data, Hora, Lead, Telefone, Tipo, É resposta, Respondendo para e Mensagem. Se tiver também <b>Classificação</b> (ex.: frio, morno, quente) e{' '}
               <b>Anúncio</b> (de qual anúncio o lead veio), o dashboard usa as duas. O Google demora até 5 minutos para refletir mudanças em planilhas publicadas na web.
             </p>
             <p className="small muted">
@@ -258,9 +261,9 @@ export function DataView({
                     )
                   })}
             </dd>
-            <dt>Temperatura e anúncio</dt>
+            <dt>Classificação e anúncio</dt>
             <dd>
-              {columns.temperature ? `Temperatura: coluna “${columns.temperature}”` : 'Sem coluna Temperatura'}
+              {columns.classification ? `Classificação: coluna “${columns.classification}”` : 'Sem coluna Classificação'}
               {' · '}
               {columns.ad ? `Anúncio: coluna “${columns.ad}”` : allConvs.some((c) => c.ad) ? 'Anúncio: pela mensagem inicial do lead (sem coluna Anúncio)' : 'Sem coluna Anúncio'}
             </dd>
@@ -293,7 +296,7 @@ export function DataView({
               <h3 className="card-title">Publicar arquivo CSV</h3>
               <p className="card-sub">
                 Alternativa à planilha online: substitui a planilha de todos os usuários; cada um recebe só as conversas dos números liberados para ele. CSV com as colunas Data,
-                Hora, Lead, Telefone, Tipo, É resposta, Respondendo para, Mensagem, status_manual (e, se quiser, Temperatura e Anúncio).
+                Hora, Lead, Telefone, Tipo, É resposta, Respondendo para, Mensagem, status_manual (e, se quiser, Classificação e Anúncio).
               </p>
             </div>
           </div>
@@ -381,7 +384,7 @@ export function DataView({
         <div className="card-head">
           <div>
             <h3 className="card-title">Exportar</h3>
-            <p className="card-sub">Relatório para o cliente e classificação de volta para a planilha</p>
+            <p className="card-sub">Relatório para o cliente e status de volta para a planilha</p>
           </div>
         </div>
         <div className="stack">
@@ -397,13 +400,13 @@ export function DataView({
           <div className="row-between">
             <div>
               <b>Mensagens com status_manual preenchido</b>
-              <div className="small muted">Mesmas colunas da planilha original (inclusive Temperatura e Anúncio); cada linha recebe o status da sua conversa.</div>
+              <div className="small muted">Mesmas colunas da planilha original (inclusive Classificação e Anúncio); cada linha recebe o status da sua conversa.</div>
             </div>
             <button
               type="button"
               className="btn"
               disabled={!dataset}
-              onClick={() => dataset && downloadText(`rastreio-whatsapp-mensagens-${stamp}.csv`, buildMessagesCsv(dataset.messages, allConvs, meta, dataset.columns))}
+              onClick={() => dataset && downloadText(`rastreio-whatsapp-mensagens-${stamp}.csv`, buildMessagesCsv(dataset.messages, allConvs, meta, v, dataset.columns))}
             >
               <Download size={14} aria-hidden /> CSV
             </button>
@@ -411,19 +414,19 @@ export function DataView({
           <div className="row-between">
             <div>
               <b>Resumo por lead</b>
-              <div className="small muted">Uma linha por conversa: procedimento, canal, temperatura, anúncio, estágio, tempos de resposta, status, follow-up e notas.</div>
+              <div className="small muted">Uma linha por conversa: {v.item}, canal, classificação, anúncio, estágio, tempos de resposta, status, follow-up e notas.</div>
             </div>
-            <button type="button" className="btn" disabled={!allConvs.length} onClick={() => downloadText(`rastreio-whatsapp-leads-${stamp}.csv`, buildLeadsCsv(allConvs, meta, label))}>
+            <button type="button" className="btn" disabled={!allConvs.length} onClick={() => downloadText(`rastreio-whatsapp-leads-${stamp}.csv`, buildLeadsCsv(allConvs, meta, v, label))}>
               <Download size={14} aria-hidden /> CSV
             </button>
           </div>
         </div>
       </section>
 
-      <section className="card" aria-label="Classificações">
+      <section className="card" aria-label="Status salvos">
         <div className="card-head">
           <div>
-            <h3 className="card-title">Classificações salvas</h3>
+            <h3 className="card-title">Status, notas e follow-ups salvos</h3>
             <p className="card-sub">Armazenadas localmente neste navegador</p>
           </div>
         </div>
@@ -449,7 +452,7 @@ export function DataView({
             if (window.confirm('Apagar todos os status, notas e follow-ups salvos neste navegador? Esta ação não pode ser desfeita.')) onClearMeta()
           }}
         >
-          <Trash2 size={14} aria-hidden /> Limpar todas as classificações
+          <Trash2 size={14} aria-hidden /> Limpar status, notas e follow-ups
         </button>
       </section>
 
@@ -478,23 +481,35 @@ export function DataView({
             planilha, igual para todos.
           </li>
           <li>
-            <b>Temperatura</b>: coluna Temperatura da planilha (frio, morno ou quente, em qualquer grafia); vale o último valor preenchido nas linhas da conversa. Sem a coluna, o
-            lead fica “sem temperatura”.
+            <b>Classificação</b>: coluna Classificação da planilha (a que as automações preenchem; planilhas antigas com a coluna Temperatura também valem). Frio, morno e
+            quente, em qualquer grafia, viram a escala Quente › Morno › Frio; outros valores aparecem como vieram. Vale o último valor preenchido nas linhas da conversa; sem a
+            coluna, o lead fica “sem classificação”.
+          </li>
+          <li>
+            <b>Tipo de negócio</b>: cada cliente é marcado na aba Usuários como clínica, loja ou outro negócio ({SEGMENTO_LABEL[v.segmento].toLowerCase()} nesta tela). Ele muda os
+            termos (procedimento ou produto, agendamento ou pedido) e as palavras procuradas nas conversas abaixo.
           </li>
           <li>
             <b>Anúncio</b>: coluna Anúncio da planilha (também aceita “Campanha” ou “Ad”). Sem ela, vale a mensagem padrão com que o lead chegou (“tenho interesse no…”, ou um texto
-            inicial idêntico ao de pelo menos 5 outros leads). No ranking, “agendados” = agendamento ou pagamento sinalizado na conversa, ou status Agendado/Convertido; “vendas” =
-            conversas com status Convertido (dado na aba Conversas ou vindo da coluna status_manual da planilha).
+            inicial idêntico ao de pelo menos 5 outros leads). No ranking, “{v.fechados.toLowerCase()}” = {v.fechamento} ou pagamento sinalizado na conversa, ou status{' '}
+            {v.status.agendado}/Convertido; “vendas” = conversas com status Convertido (dado na aba Conversas ou vindo da coluna status_manual da planilha).
           </li>
           <li>
-            <b>Procedimento</b>: extraído da mensagem padrão do anúncio (“tenho interesse no…”); na falta dela, de palavras-chave nas mensagens do lead e, por último, nas respostas da clínica.
+            <b>Procedimento ou produto</b>: extraído da mensagem padrão do anúncio (“tenho interesse no…”); na falta dela, de palavras-chave nas mensagens do lead (clínica:
+            procedimentos estéticos; loja: categorias como camisas, calças, calçados, kits) e, só em clínicas, nas respostas da clínica. Em “outro negócio”, só pela mensagem do
+            anúncio.
           </li>
           <li>
-            <b>Estágio inferido</b>: pagamento (Pix, sinal, comprovante) &gt; agendamento (clínica confirma horário) &gt; pediu agendamento (lead cita agendar, avaliação, horário) &gt; em
-            conversa (lead voltou a escrever após a resposta) &gt; contato inicial. É uma heurística: o status manual é a fonte oficial.
+            <b>Canal</b>: anúncio (mensagem padrão do anúncio ou coluna Anúncio), Instagram (lead citou a rede), prospecção ativa (a empresa escreveu primeiro) ou orgânico.
           </li>
           <li>
-            <b>Tempo de resposta</b>: intervalo entre a primeira mensagem do lead sem resposta e a próxima mensagem da clínica. Inclui horários fora do expediente.
+            <b>Estágio inferido</b>: pagamento (Pix, sinal, comprovante) &gt; {v.fechamento} sinalizado &gt; {v.intencao.toLowerCase()} &gt; em conversa (lead voltou a escrever após
+            a resposta) &gt; contato inicial. Clínica: agendamento = clínica confirma horário; pediu agendamento = lead cita agendar, avaliação, horário. Loja: pedido = loja
+            confirma separação, reserva ou entrega (motoboy, “seu pedido”); interesse de compra = lead pergunta tamanho, estoque ou entrega, ou diz que vai levar. É uma
+            heurística: o status manual é a fonte oficial.
+          </li>
+          <li>
+            <b>Tempo de resposta</b>: intervalo entre a primeira mensagem do lead sem resposta e a próxima mensagem da {v.empresa}. Inclui horários fora do expediente.
           </li>
           <li>
             <b>Espera e silêncio</b>: calculados em relação à última mensagem da base, não ao relógio do computador, para a leitura ser estável em bases antigas.

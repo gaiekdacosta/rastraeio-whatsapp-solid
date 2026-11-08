@@ -1,12 +1,13 @@
 import { useMemo, useState } from 'react'
-import { AlertCircle, Flame, Inbox, Send, Tags, Timer, UserPlus, Users } from 'lucide-react'
+import { AlertCircle, Flame, Inbox, Send, Tag, Tags, Timer, UserPlus, Users } from 'lucide-react'
 import type { Conversation, ExtraColumns, Message } from '../lib/types'
 import type { MetaMap } from '../lib/storage'
 import type { Palette } from '../theme'
 import {
-  AD_METRICS,
   LINE_NONE,
+  adMetrics,
   adSummary,
+  adValue,
   awaitingList,
   countBy,
   leadConversations,
@@ -17,12 +18,13 @@ import {
   newLeadsPerWeek,
   rankAds,
   shareWithin,
-  temperatureCounts,
+  classificationCounts,
 } from '../lib/analytics'
 import type { AdMetric } from '../lib/analytics'
 import { fmtDateKey, fmtHours, fmtInt, fmtLine, fmtMinutes, fmtPct, fromDateKey, toDateKey } from '../lib/format'
-import { STAGE_LABEL, STAGE_ORDER, STATUS_LABEL, STATUS_ORDER } from '../lib/status'
-import { TEMPERATURE_LABEL, TEMPERATURE_NONE_LABEL } from '../lib/temperature'
+import { STAGE_ORDER, STATUS_ORDER } from '../lib/status'
+import { CLASS_NONE_LABEL, classColors, classKey, classPlural } from '../lib/classification'
+import type { Vocab } from '../lib/segment'
 import type { OverviewId } from '../lib/overview'
 import { StatTile } from '../components/StatTile'
 import { ChartCard } from '../components/ChartCard'
@@ -33,6 +35,7 @@ import { HBars } from '../components/charts/HBars'
 import { StackedHBars } from '../components/charts/StackedHBars'
 import { StatusBadge } from '../components/StatusBadge'
 import { useLineNames } from '../lineNames'
+import { useVocab } from '../vocab'
 
 interface Props {
   convs: Conversation[]
@@ -43,8 +46,10 @@ interface Props {
   clinicPhones: string[]
   attendants: Map<string, string[]>
   activeLine: string
-  /** Colunas opcionais encontradas na planilha (Temperatura, Anúncio), para explicar blocos vazios. */
+  /** Colunas opcionais encontradas na planilha (Classificação, Anúncio), para explicar blocos vazios. */
   columns: ExtraColumns
+  /** Classificações da base inteira, na ordem dos gráficos (as cores seguem esta ordem). */
+  classes: string[]
   /** Blocos que esta pessoa vê (o administrador escolhe por usuário na aba Usuários). */
   visible: Set<OverviewId>
   /** Só para o administrador: nome do cliente dono de cada número, para a tabela por número. */
@@ -58,21 +63,51 @@ const CARDS: OverviewId[] = ['atendimento-numero', 'mensagens-dia', 'leads-seman
 
 const AD_TOP = 10
 
-/** Cor de cada linha do gráfico de temperatura, pelo rótulo. */
-export function temperatureColors(palette: Palette, names: string[]): string[] {
-  const byLabel: Record<string, string> = {
-    [TEMPERATURE_LABEL.quente]: palette.temperature.quente,
-    [TEMPERATURE_LABEL.morno]: palette.temperature.morno,
-    [TEMPERATURE_LABEL.frio]: palette.temperature.frio,
-    [TEMPERATURE_NONE_LABEL]: palette.temperature.none,
-  }
-  return names.map((n) => byLabel[n] ?? palette.series1)
+/** Cor de cada barra do gráfico de classificação, pelo rótulo (série única quando há classificações demais). */
+export function classBarColors(palette: Palette, classes: string[], names: string[]): string[] {
+  const colors = classColors(palette, classes)
+  return names.map((n) => colors?.[n] ?? (n === CLASS_NONE_LABEL ? palette.temperature.none : palette.series1))
 }
 
-export function OverviewView({ convs, msgs, range, meta, palette, clinicPhones, attendants, activeLine, columns, visible, clientOf, onFilterLine, onOpenConv }: Props) {
+/** Séries da pilha de leads por classificação (null = classificações demais para empilhar). */
+export function classSeries(palette: Palette, classes: string[]): { key: string; label: string; color: string }[] | null {
+  const colors = classColors(palette, classes)
+  if (!colors) return null
+  return [
+    ...classes.map((c) => ({ key: classKey(c), label: c, color: colors[c] })),
+    { key: 'semClassificacao', label: CLASS_NONE_LABEL, color: colors[CLASS_NONE_LABEL] },
+  ]
+}
+
+/** Indicador "Leads quentes" (escala de temperatura) ou, com outras classificações, "Leads classificados". */
+export function classKpi(leads: { classification: string | null }[], classes: string[]): { title: string; value: number; hint: string; scale: boolean } {
+  const count = (c: string) => leads.filter((l) => l.classification === c).length
+  const pct = (n: number) => fmtPct(leads.length ? n / leads.length : NaN)
+  if (classes.includes('Quente')) {
+    const hot = count('Quente')
+    const others = classes.filter((c) => c !== 'Quente').map((c) => `${fmtInt(count(c))} ${classPlural(c).toLowerCase()}`)
+    return { title: 'Leads quentes', value: hot, hint: [`${pct(hot)} dos leads`, ...others].join(' · '), scale: true }
+  }
+  const classified = leads.filter((l) => l.classification).length
+  const top = classes.map((c) => ({ c, n: count(c) })).sort((a, b) => b.n - a.n)[0]
+  return {
+    title: 'Leads classificados',
+    value: classified,
+    hint: top && top.n ? `${pct(classified)} dos leads · mais comum: ${top.c} (${fmtInt(top.n)})` : `${pct(classified)} dos leads`,
+    scale: false,
+  }
+}
+
+/** "Agendados = agendamento ou pagamento sinalizado na conversa, ou status Agendado/Convertido." */
+export function closedRule(v: Vocab): string {
+  return `${v.fechados} = ${v.fechamento} ou pagamento sinalizado na conversa, ou status ${v.status.agendado}/Convertido. Vendas = conversas com status Convertido.`
+}
+
+export function OverviewView({ convs, msgs, range, meta, palette, clinicPhones, attendants, activeLine, columns, classes, visible, clientOf, onFilterLine, onOpenConv }: Props) {
   const multiLine = clinicPhones.length > 1
   const show = (id: OverviewId) => visible.has(id)
   const { label, isRenamed } = useLineNames()
+  const v = useVocab()
   const [adMetric, setAdMetric] = useState<AdMetric>('leads')
   const leads = useMemo(() => leadConversations(convs, meta), [convs, meta])
   const newLeads = useMemo(
@@ -97,42 +132,37 @@ export function OverviewView({ convs, msgs, range, meta, palette, clinicPhones, 
   const perWeek = useMemo(() => newLeadsPerWeek(leads, range), [leads, range])
   const byProcedure = useMemo(() => countBy(leads, (c) => c.procedure, 8), [leads])
   const stageRows = useMemo(
-    () => STAGE_ORDER.map((s) => ({ name: STAGE_LABEL[s], value: leads.filter((c) => c.stage === s).length })).filter((r) => r.value > 0),
-    [leads],
+    () => STAGE_ORDER.map((s) => ({ name: v.stage[s], value: leads.filter((c) => c.stage === s).length })).filter((r) => r.value > 0),
+    [leads, v],
   )
-  const statusRows = useMemo(() => manualStatusCounts(leads, meta, STATUS_ORDER, STATUS_LABEL).filter((r) => r.value > 0), [leads, meta])
+  const statusRows = useMemo(() => manualStatusCounts(leads, meta, STATUS_ORDER, v.status).filter((r) => r.value > 0), [leads, meta, v])
   const lineRows = useMemo(
     () => (multiLine ? lineSummary(leads, msgs, range, clinicPhones, attendants) : []),
     [multiLine, leads, msgs, range, clinicPhones, attendants],
   )
   const multiLineConvs = useMemo(() => leads.filter((c) => c.lines.length > 1).length, [leads])
 
-  // Temperatura (coluna da planilha) e anúncios (coluna da planilha ou mensagem inicial do anúncio).
-  const hasTemperature = useMemo(() => leads.some((c) => c.temperature), [leads])
-  const hot = leads.filter((c) => c.temperature === 'quente').length
-  const warm = leads.filter((c) => c.temperature === 'morno').length
-  const cold = leads.filter((c) => c.temperature === 'frio').length
-  const tempRows = useMemo(() => (hasTemperature ? temperatureCounts(leads) : []), [hasTemperature, leads])
-  const adRows = useMemo(() => rankAds(adSummary(leads, meta), adMetric), [leads, meta, adMetric])
+  // Classificação (coluna da planilha) e anúncios (coluna da planilha ou mensagem inicial do anúncio).
+  const hasClassification = useMemo(() => leads.some((c) => c.classification), [leads])
+  const kpiClass = classKpi(leads, classes)
+  const classRows = useMemo(() => (hasClassification ? classificationCounts(leads, classes) : []), [hasClassification, leads, classes])
+  const metrics = useMemo(() => adMetrics(classes, v), [classes, v])
+  // Classificação escolhida no seletor que sumiu da base (planilha mudou): volta para leads.
+  const metric = metrics.find((m) => m.id === adMetric) ?? metrics[0]
+  const adRows = useMemo(() => rankAds(adSummary(leads, meta), metric.id), [leads, meta, metric.id])
   const adTop = useMemo(() => adRows.slice(0, AD_TOP).map((r) => ({ ...r, name: r.ad })), [adRows])
   const noAd = leads.length - adRows.reduce((s, r) => s + r.leads, 0)
   const totalSales = adRows.reduce((s, r) => s + r.vendas, 0)
   const fromSheet = adRows.some((r) => r.source === 'planilha')
-  const metric = AD_METRICS.find((m) => m.id === adMetric) ?? AD_METRICS[0]
-  const tempSeries = [
-    { key: 'quente', label: TEMPERATURE_LABEL.quente, color: palette.temperature.quente },
-    { key: 'morno', label: TEMPERATURE_LABEL.morno, color: palette.temperature.morno },
-    { key: 'frio', label: TEMPERATURE_LABEL.frio, color: palette.temperature.frio },
-    { key: 'semTemperatura', label: TEMPERATURE_NONE_LABEL, color: palette.temperature.none },
-  ]
+  const stack = hasClassification ? classSeries(palette, classes) : null
 
   const series = [
     { key: 'recebidas', label: 'Recebidas (leads)', color: palette.series1 },
-    { key: 'enviadas', label: 'Enviadas (clínica)', color: palette.series2 },
+    { key: 'enviadas', label: `Enviadas (${v.empresa})`, color: palette.series2 },
   ]
 
-  // Indicador de leads quentes só faz sentido quando a planilha traz temperatura.
-  const anyKpi = KPIS.some((id) => show(id) && (id !== 'leads-quentes' || hasTemperature))
+  // Indicador de classificação só faz sentido quando a planilha traz a coluna.
+  const anyKpi = KPIS.some((id) => show(id) && (id !== 'leads-quentes' || hasClassification))
   // A tabela por número só existe com mais de um número liberado; sem isso, não conta como bloco visível.
   const anyCard = CARDS.some((id) => show(id) && (id !== 'atendimento-numero' || multiLine))
 
@@ -170,22 +200,22 @@ export function OverviewView({ convs, msgs, range, meta, palette, clinicPhones, 
           {show('aguardando-resposta') && (
             <StatTile
               icon={<AlertCircle size={14} />}
-              label="Aguardando resposta da clínica"
+              label={`Aguardando resposta da ${v.empresa}`}
               value={fmtInt(awaiting.length)}
               hint={awaiting24 ? `${fmtInt(awaiting24)} esperando há mais de 24h` : 'nenhum lead esperando há mais de 24h'}
               tone={awaiting24 ? 'bad' : 'good'}
             />
           )}
           {show('sem-status') && (
-            <StatTile icon={<Tags size={14} />} label="Sem status manual" value={fmtInt(noStatus)} hint={leads.length ? `${fmtPct(1 - noStatus / leads.length)} dos leads já classificados` : '—'} />
+            <StatTile icon={<Tags size={14} />} label="Sem status manual" value={fmtInt(noStatus)} hint={leads.length ? `${fmtPct(1 - noStatus / leads.length)} dos leads já com status` : '—'} />
           )}
-          {show('leads-quentes') && hasTemperature && (
+          {show('leads-quentes') && hasClassification && (
             <StatTile
-              icon={<Flame size={14} />}
-              label="Leads quentes"
-              value={fmtInt(hot)}
-              hint={`${fmtPct(leads.length ? hot / leads.length : NaN)} dos leads · ${fmtInt(warm)} mornos · ${fmtInt(cold)} frios`}
-              tone={hot ? 'good' : undefined}
+              icon={kpiClass.scale ? <Flame size={14} /> : <Tag size={14} />}
+              label={kpiClass.title}
+              value={fmtInt(kpiClass.value)}
+              hint={kpiClass.hint}
+              tone={kpiClass.scale && kpiClass.value ? 'good' : undefined}
             />
           )}
         </div>
@@ -274,17 +304,15 @@ export function OverviewView({ convs, msgs, range, meta, palette, clinicPhones, 
                 title="Anúncios"
                 subtitle={
                   fromSheet
-                    ? 'Leads por anúncio de origem (coluna Anúncio da planilha), com a temperatura, os agendamentos e as vendas de cada um'
+                    ? `Leads por anúncio de origem (coluna Anúncio da planilha), com a classificação, os ${v.fechamentos} e as vendas de cada um`
                     : 'Leads por anúncio de origem, identificado pela mensagem padrão com que o lead chegou; adicione a coluna Anúncio na planilha para usar o nome exato'
                 }
                 rows={adRows}
                 columns={[
                   { key: 'ad', label: 'Anúncio' },
                   { key: 'leads', label: 'Leads', numeric: true },
-                  { key: 'quente', label: 'Quentes', numeric: true },
-                  { key: 'morno', label: 'Mornos', numeric: true },
-                  { key: 'frio', label: 'Frios', numeric: true },
-                  { key: 'agendados', label: 'Agendados', numeric: true },
+                  ...classes.map((c) => ({ key: classKey(c), label: classPlural(c), numeric: true, format: (x: unknown) => fmtInt(Number(x) || 0) })),
+                  { key: 'agendados', label: v.fechados, numeric: true },
                   { key: 'vendas', label: 'Vendas', numeric: true },
                 ]}
                 emptyText={
@@ -292,12 +320,12 @@ export function OverviewView({ convs, msgs, range, meta, palette, clinicPhones, 
                     ? 'Nenhum lead com anúncio preenchido no período selecionado.'
                     : 'Nenhum anúncio identificado: adicione a coluna Anúncio na planilha (de qual anúncio cada lead veio) ou use a mensagem padrão do anúncio no WhatsApp.'
                 }
-                legend={adMetric === 'leads' && hasTemperature ? <Legend items={tempSeries} mark="rect" /> : undefined}
+                legend={metric.id === 'leads' && stack ? <Legend items={stack} mark="rect" /> : undefined}
                 actions={
                   <label className="control sm" title="Ordenar os anúncios pela métrica">
-                    <select aria-label="Ordenar anúncios por" value={adMetric} onChange={(e) => setAdMetric(e.target.value as AdMetric)}>
-                      {AD_METRICS.map((m) => (
-                        <option key={m.id} value={m.id} disabled={!hasTemperature && (m.id === 'quente' || m.id === 'morno' || m.id === 'frio')}>
+                    <select aria-label="Ordenar anúncios por" value={metric.id} onChange={(e) => setAdMetric(e.target.value)}>
+                      {metrics.map((m) => (
+                        <option key={m.id} value={m.id}>
                           {m.label}
                         </option>
                       ))}
@@ -305,12 +333,12 @@ export function OverviewView({ convs, msgs, range, meta, palette, clinicPhones, 
                   </label>
                 }
               >
-                {adMetric === 'leads' && hasTemperature ? (
-                  <StackedHBars data={adTop} nameKey="name" series={tempSeries} totalKey="leads" palette={palette} labelWidth={260} />
+                {metric.id === 'leads' && stack ? (
+                  <StackedHBars data={adTop} nameKey="name" series={stack} totalKey="leads" palette={palette} labelWidth={260} />
                 ) : (
-                  <HBars data={adTop.map((r) => ({ name: r.name, value: r[adMetric] as number }))} label={metric.short} palette={palette} labelWidth={260} />
+                  <HBars data={adTop.map((r) => ({ name: r.name, value: adValue(r, metric.id) }))} label={metric.short} palette={palette} labelWidth={260} />
                 )}
-                {adMetric === 'vendas' && totalSales === 0 && (
+                {metric.id === 'vendas' && totalSales === 0 && (
                   <div className="callout" style={{ marginTop: 8 }}>
                     Nenhuma venda registrada no período. Marque as conversas que viraram venda com o status <b>Convertido</b> (na aba Conversas ou na coluna status_manual da
                     planilha) para o ranking de vendas funcionar.
@@ -319,7 +347,7 @@ export function OverviewView({ convs, msgs, range, meta, palette, clinicPhones, 
                 <p className="small muted" style={{ marginTop: 8 }}>
                   {adRows.length > AD_TOP ? `${AD_TOP} de ${fmtInt(adRows.length)} anúncios no gráfico (a tabela tem todos). ` : ''}
                   {noAd > 0 ? `${fmtInt(noAd)} ${noAd === 1 ? 'lead sem anúncio identificado' : 'leads sem anúncio identificado'}. ` : ''}
-                  Agendados = agendamento ou pagamento sinalizado na conversa, ou status Agendado/Convertido. Vendas = conversas com status Convertido.
+                  {closedRule(v)}
                 </p>
               </ChartCard>
             </div>
@@ -329,7 +357,7 @@ export function OverviewView({ convs, msgs, range, meta, palette, clinicPhones, 
             <div className="span-2">
               <ChartCard
                 title="Mensagens por dia"
-                subtitle="Volume diário de mensagens recebidas dos leads e enviadas pela clínica"
+                subtitle={`Volume diário de mensagens recebidas dos leads e enviadas pela ${v.empresa}`}
                 rows={perDay}
                 columns={[
                   { key: 'date', label: 'Dia', format: (v) => fmtDateKey(String(v)) },
@@ -373,30 +401,30 @@ export function OverviewView({ convs, msgs, range, meta, palette, clinicPhones, 
 
           {show('temperatura') && (
             <ChartCard
-              title="Temperatura dos leads"
-              subtitle="Frio, morno ou quente, conforme a coluna Temperatura da planilha"
-              rows={tempRows}
+              title="Classificação dos leads"
+              subtitle={`Conforme a coluna ${columns.classification ? `“${columns.classification}”` : 'Classificação'} da planilha`}
+              rows={classRows}
               columns={[
-                { key: 'name', label: 'Temperatura' },
+                { key: 'name', label: 'Classificação' },
                 { key: 'value', label: 'Leads', numeric: true },
               ]}
               emptyText={
-                columns.temperature
-                  ? 'Nenhum lead com temperatura preenchida no período selecionado.'
-                  : 'A planilha não tem a coluna Temperatura. Adicione uma coluna com esse nome e preencha com frio, morno ou quente.'
+                columns.classification
+                  ? 'Nenhum lead com classificação preenchida no período selecionado.'
+                  : 'A planilha não tem a coluna Classificação. Adicione uma coluna com esse nome (ex.: frio, morno, quente).'
               }
             >
-              <HBars data={tempRows} label="Leads" palette={palette} colors={temperatureColors(palette, tempRows.map((r) => r.name))} />
+              <HBars data={classRows} label="Leads" palette={palette} colors={classBarColors(palette, classes, classRows.map((r) => r.name))} />
             </ChartCard>
           )}
 
           {show('procedimentos') && (
             <ChartCard
-              title="Procedimentos de interesse"
+              title={`${v.Itens} de interesse`}
               subtitle="Identificado pela mensagem inicial do anúncio ou por palavras-chave do lead"
               rows={byProcedure}
               columns={[
-                { key: 'name', label: 'Procedimento' },
+                { key: 'name', label: v.Item },
                 { key: 'value', label: 'Leads', numeric: true },
               ]}
             >
@@ -407,7 +435,7 @@ export function OverviewView({ convs, msgs, range, meta, palette, clinicPhones, 
           {show('estagio') && (
             <ChartCard
               title="Estágio inferido das conversas"
-              subtitle="Classificação automática pelo conteúdo das mensagens"
+              subtitle="Inferido automaticamente pelo conteúdo das mensagens"
               rows={stageRows}
               columns={[
                 { key: 'name', label: 'Estágio' },
@@ -421,7 +449,7 @@ export function OverviewView({ convs, msgs, range, meta, palette, clinicPhones, 
           {show('status-manual') && (
             <ChartCard
               title="Status manual"
-              subtitle="Classificação feita pela equipe na aba Conversas"
+              subtitle="Status dado pela equipe na aba Conversas"
               rows={statusRows}
               columns={[
                 { key: 'name', label: 'Status' },
@@ -436,7 +464,7 @@ export function OverviewView({ convs, msgs, range, meta, palette, clinicPhones, 
             <section className="card span-2" aria-label="Leads aguardando resposta">
               <div className="card-head">
                 <div>
-                  <h3 className="card-title">Leads aguardando resposta da clínica</h3>
+                  <h3 className="card-title">Leads aguardando resposta da {v.empresa}</h3>
                   <p className="card-sub">Última mensagem da conversa foi do lead. Ordenado por tempo de espera.</p>
                 </div>
               </div>
@@ -448,7 +476,7 @@ export function OverviewView({ convs, msgs, range, meta, palette, clinicPhones, 
                     <thead>
                       <tr>
                         <th>Lead</th>
-                        <th>Procedimento</th>
+                        <th>{v.Item}</th>
                         {multiLine && <th>Número</th>}
                         <th>Última mensagem</th>
                         <th className="num">Esperando há</th>

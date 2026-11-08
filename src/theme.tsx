@@ -23,8 +23,10 @@ export interface Palette {
   warning: string
   serious: string
   critical: string
-  /** Temperatura do lead, do frio ao quente (rampa ordinal quente validada para cada superfície). */
+  /** Classificação na escala frio › morno › quente (rampa ordinal quente validada para cada superfície). */
   temperature: { frio: string; morno: string; quente: string; none: string }
+  /** Paleta categórica (8 cores em ordem fixa), para classificações fora da escala de temperatura. */
+  categorical: string[]
 }
 
 /* Rampas validadas com scripts/validate_palette.js (--ordinal) para cada superfície. */
@@ -36,6 +38,11 @@ const ORDINAL: Record<Resolved, string[]> = {
 const TEMPERATURE: Record<Resolved, { frio: string; morno: string; quente: string }> = {
   light: { frio: '#f2a06e', morno: '#d9541f', quente: '#8c2a0e' },
   dark: { frio: '#9a3a14', morno: '#e2602a', quente: '#f7b58f' },
+}
+/* Categórica da skill dataviz, na ordem validada (adjacentes passam CVD nos dois modos). */
+const CATEGORICAL: Record<Resolved, string[]> = {
+  light: ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#6250d6', '#e34948'],
+  dark: ['#3987e5', '#d95926', '#199e70', '#c98500', '#d55181', '#008300', '#9085e9', '#e66767'],
 }
 /* Sequencial: um matiz, claro→escuro; no escuro a âncora inverte (perto de zero recua para a superfície). */
 const SEQUENTIAL: Record<Resolved, string[]> = {
@@ -67,6 +74,7 @@ function buildPalette(mode: Resolved): Palette {
     serious: readVar('--status-serious'),
     critical: readVar('--status-critical'),
     temperature: { ...TEMPERATURE[mode], none: readVar('--baseline') },
+    categorical: CATEGORICAL[mode],
   }
 }
 

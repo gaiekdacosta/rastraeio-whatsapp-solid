@@ -15,19 +15,21 @@ import {
   referenceTime,
 } from './lib/analytics'
 import { accessKey, SEM_NUMERO, splitCsvByAccess } from './lib/access'
-import { buildClients, clientNameByKey } from './lib/clients'
+import { buildClients, clientNameByKey, segmentByKey } from './lib/clients'
 import type { Client } from './lib/clients'
 import { loadMeta, saveMeta } from './lib/storage'
 import type { MetaMap } from './lib/storage'
-import { STATUS_LABEL, labelToStatus } from './lib/status'
-import { TEMPERATURE_LABEL, TEMPERATURE_NONE, TEMPERATURE_NONE_LABEL } from './lib/temperature'
-import type { Temperature } from './lib/types'
+import { labelToStatus } from './lib/status'
+import { CLASS_NONE, CLASS_NONE_LABEL, sortClasses } from './lib/classification'
+import { DEFAULT_SEGMENTO, commonSegmento, vocabFor } from './lib/segment'
+import type { Segmento } from './lib/segment'
 import { fetchSheetCsv } from './lib/sheet'
 import { visibleInsights } from './lib/insights'
 import { visibleOverview } from './lib/overview'
 import { fmtInt } from './lib/format'
 import { useTheme } from './theme'
 import { useLineNames } from './lineNames'
+import { VocabProvider } from './vocab'
 import { useSession } from './auth/AuthProvider'
 import type { AppUser, FonteOnline } from './auth/types'
 import { ThemeToggle } from './components/ThemeToggle'
@@ -274,7 +276,17 @@ export default function App() {
   }, [empresa])
 
   const refTime = useMemo(() => dataset?.refTime ?? new Date(), [dataset])
-  const baseConvs = useMemo(() => (dataset ? buildConversations(dataset.messages, refTime, dataset.clinicPhones) : []), [dataset, refTime])
+  // Tipo de negócio de cada número (decide o que as heurísticas procuram: procedimento × produto, agendamento × pedido).
+  // Usuário: o dele. Admin: o do cliente dono do número; número sem cliente fica como clínica.
+  const segmentOf = useMemo<(key: string) => Segmento>(() => {
+    if (!isAdmin) return () => user.segmento
+    const byKey = segmentByKey(buildClients(users, []))
+    return (key) => byKey.get(key) ?? DEFAULT_SEGMENTO
+  }, [isAdmin, user.segmento, users])
+  const baseConvs = useMemo(
+    () => (dataset ? buildConversations(dataset.messages, refTime, dataset.clinicPhones, segmentOf) : []),
+    [dataset, refTime, segmentOf],
+  )
   const baseUnknown = useMemo(() => baseConvs.some((c) => !c.line && !c.isGroup), [baseConvs])
   // Clientes (só admin): as contas da aba Usuários agrupadas por empresa, mais "Sem cliente" para o que nenhuma conta tem.
   const clients = useMemo<Client[]>(
@@ -286,6 +298,12 @@ export default function App() {
     [isAdmin, filters.cliente, clients],
   )
   const clientNames = useMemo(() => clientNameByKey(clients), [clients])
+  // Termos da tela: os do usuário ou, para o admin, os do cliente escolhido; com clientes de tipos diferentes juntos, neutros.
+  const vocab = useMemo(() => {
+    if (!isAdmin) return vocabFor(user.segmento)
+    if (selectedClient) return vocabFor(selectedClient.segmento)
+    return vocabFor(commonSegmento(clients.filter((c) => !c.pseudo).map((c) => c.segmento)))
+  }, [isAdmin, user.segmento, selectedClient, clients])
   // Recorte: usuário comum vê só os números liberados (no Supabase com arquivo publicado o servidor já entrega só esses
   // arquivos; aqui o filtro se repete, e é o único no modo demonstração e com a planilha online). Admin vê tudo ou, com um
   // cliente escolhido no topo, só os números dele.
@@ -309,7 +327,7 @@ export default function App() {
   const minTime = useMemo(() => dataset?.messages[0]?.at ?? refTime, [dataset, refTime])
   const attendants = useMemo(() => attendantsByLine(messages), [messages])
 
-  // Status já preenchidos na planilha viram status manual quando ainda não há classificação local.
+  // Status já preenchidos na planilha viram status manual quando ainda não há status salvo neste navegador.
   useEffect(() => {
     if (!allConvs.length) return
     setMeta((prev) => {
@@ -337,7 +355,12 @@ export default function App() {
   )
   const procedures = useMemo(() => [...new Set(allConvs.map((c) => c.procedure))].sort((a, b) => a.localeCompare(b, 'pt-BR')), [allConvs])
   const channels = useMemo(() => [...new Set(allConvs.map((c) => c.channel))].sort((a, b) => a.localeCompare(b, 'pt-BR')), [allConvs])
-  const hasTemperature = useMemo(() => allConvs.some((c) => c.temperature), [allConvs])
+  // Classificações da base (coluna Classificação), escala quente/morno/frio primeiro: ordem e cores fixas, que não mudam com os filtros.
+  const classes = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const c of allConvs) if (c.classification) counts.set(c.classification, (counts.get(c.classification) ?? 0) + 1)
+    return sortClasses(counts)
+  }, [allConvs])
   const ads = useMemo(() => [...new Set(allConvs.filter((c) => c.ad).map((c) => c.ad))].sort((a, b) => a.localeCompare(b, 'pt-BR')), [allConvs])
   const hasNoAd = useMemo(() => allConvs.some((c) => !c.ad && !c.isGroup && !c.isInternal), [allConvs])
   const hasUnknownLine = useMemo(() => allConvs.some((c) => !c.line && !c.isGroup), [allConvs])
@@ -423,14 +446,13 @@ export default function App() {
   const reportScope = useMemo(() => {
     const s: string[] = []
     if (filters.line !== 'all') s.push(`Número: ${filters.line === LINE_NONE ? 'não identificado' : lineLabel(filters.line)}`)
-    if (filters.procedure !== 'all') s.push(`Procedimento: ${filters.procedure}`)
-    if (filters.status !== 'all') s.push(`Status: ${filters.status === 'sem_status' ? 'Sem status' : STATUS_LABEL[filters.status as Status]}`)
+    if (filters.procedure !== 'all') s.push(`${vocab.Item}: ${filters.procedure}`)
+    if (filters.status !== 'all') s.push(`Status: ${filters.status === 'sem_status' ? 'Sem status' : vocab.status[filters.status as Status]}`)
     if (filters.channel !== 'all') s.push(`Canal: ${filters.channel}`)
-    if (filters.temperature !== 'all')
-      s.push(`Temperatura: ${filters.temperature === TEMPERATURE_NONE ? TEMPERATURE_NONE_LABEL : TEMPERATURE_LABEL[filters.temperature as Temperature]}`)
+    if (filters.classification !== 'all') s.push(`Classificação: ${filters.classification === CLASS_NONE ? CLASS_NONE_LABEL : filters.classification}`)
     if (filters.ad !== 'all') s.push(`Anúncio: ${filters.ad === AD_NONE ? AD_NONE_LABEL : filters.ad}`)
     return s
-  }, [filters, lineLabel])
+  }, [filters, lineLabel, vocab])
 
   const dataView = (
     <DataView
@@ -456,147 +478,151 @@ export default function App() {
   )
 
   return (
-    <div className="app">
-      <header className="topbar">
-        <div className="topbar-inner">
-          <BrandLogo empresa={empresa} />
-          <nav className="tabs" role="tablist" aria-label="Seções">
-            {tabs.map((t) => {
-              const Icon = t.icon
-              return (
-                <button key={t.id} type="button" role="tab" className="tab" aria-selected={tab === t.id} onClick={() => setTab(t.id)}>
-                  <Icon size={15} aria-hidden />
-                  {t.label}
-                  {t.id === 'conversas' && dataset && <span className="count">{fmtInt(filtered.convs.length)}</span>}
-                </button>
-              )
-            })}
-          </nav>
-          {dataset && (
-            <button type="button" className="btn sm report-btn" onClick={() => setReport(true)} title="Relatório em PDF com as métricas do período e dos filtros atuais">
-              <FileDown size={14} aria-hidden /> <span>PDF</span>
-            </button>
-          )}
-          <ThemeToggle />
-          <UserMenu />
-        </div>
-      </header>
-
-      <main className="main">
-        {backend.kind === 'demo' && (
-          <div className="callout demo-banner">
-            <b>Modo demonstração</b> — sem Supabase configurado. Contas, senhas e números liberados ficam só neste navegador; configure o <code>.env</code> para usar o
-            login de verdade.
+    <VocabProvider value={vocab}>
+      <div className="app">
+        <header className="topbar">
+          <div className="topbar-inner">
+            <BrandLogo empresa={empresa} />
+            <nav className="tabs" role="tablist" aria-label="Seções">
+              {tabs.map((t) => {
+                const Icon = t.icon
+                return (
+                  <button key={t.id} type="button" role="tab" className="tab" aria-selected={tab === t.id} onClick={() => setTab(t.id)}>
+                    <Icon size={15} aria-hidden />
+                    {t.label}
+                    {t.id === 'conversas' && dataset && <span className="count">{fmtInt(filtered.convs.length)}</span>}
+                  </button>
+                )
+              })}
+            </nav>
+            {dataset && (
+              <button type="button" className="btn sm report-btn" onClick={() => setReport(true)} title="Relatório em PDF com as métricas do período e dos filtros atuais">
+                <FileDown size={14} aria-hidden /> <span>PDF</span>
+              </button>
+            )}
+            <ThemeToggle />
+            <UserMenu />
           </div>
-        )}
-        {tab === 'usuarios' && isAdmin ? (
-          <UsersView
-            lines={dataset?.clinicPhones ?? []}
-            hasUnknownLine={hasUnknownLine}
-            counts={accessCounts}
-            attendants={attendants}
-            hasBase={!!dataset}
-            onUsersChanged={setUsers}
-          />
-        ) : loading ? (
-          <div className="loading-screen">{source ? 'Lendo a planilha online…' : 'Carregando base de mensagens…'}</div>
-        ) : !dataset ? (
-          isAdmin ? (
-            dataView
-          ) : (
-            <NoAccess reason={empty} error={error} />
-          )
-        ) : (
-          <>
-            {tab !== 'dados' && (
-              <FilterBar
-                filters={filters}
-                onChange={setFilters}
-                procedures={procedures}
-                channels={channels}
-                hasTemperature={hasTemperature}
-                ads={ads}
-                hasNoAd={hasNoAd}
-                lines={clinicPhones}
-                hasUnknownLine={hasUnknownLine}
-                lineCounts={lineCounts}
-                attendants={attendants}
-                refTime={refTime}
-                range={range}
-                clients={clients}
-                clientCounts={clientCounts.counts}
-                clientTotal={clientCounts.total}
-                live={source ? live : null}
-                onRefresh={refreshNow}
-              />
-            )}
-            {selectedClient && allConvs.length === 0 ? (
-              <section className="card no-access" aria-label="Cliente sem conversas">
-                <Lock size={28} aria-hidden />
-                <h2>Nenhuma conversa para mostrar</h2>
-                <p>
-                  {selectedClient.numeros.length === 0
-                    ? `${selectedClient.nome} ainda não tem número liberado. Libere os números dele na aba Usuários.`
-                    : `A planilha atual não tem conversas dos números de ${selectedClient.nome}.`}
-                </p>
-              </section>
-            ) : (
-              <>
-                {tab === 'overview' && (
-                  <OverviewView
-                    convs={filtered.convs}
-                    msgs={filtered.messages}
-                    range={range}
-                    meta={meta}
-                    palette={palette}
-                    clinicPhones={clinicPhones}
-                    attendants={attendants}
-                    activeLine={filters.line}
-                    columns={dataset.columns}
-                    visible={overview}
-                    clientOf={isAdmin ? (line) => clientNames.get(line || SEM_NUMERO) : undefined}
-                    onFilterLine={filterLine}
-                    onOpenConv={openConv}
-                  />
-                )}
-                {tab === 'conversas' && (
-                  <ConversationsView
-                    convs={filtered.convs}
-                    allConvs={allConvs}
-                    meta={meta}
-                    onMeta={updateMeta}
-                    selectedKey={selectedKey}
-                    onSelect={setSelectedKey}
-                    refTime={refTime}
-                    multiLine={clinicPhones.length > 1}
-                  />
-                )}
-                {tab === 'insights' && insights.size > 0 && (
-                  <InsightsView convs={filtered.convs} msgs={filtered.messages} meta={meta} palette={palette} visible={insights} onOpenConv={openConv} />
-                )}
-              </>
-            )}
-            {tab === 'dados' && dataView}
-          </>
-        )}
-      </main>
+        </header>
 
-      {report && dataset && (
-        <ReportView
-          convs={filtered.convs}
-          msgs={filtered.messages}
-          range={range}
-          meta={meta}
-          palette={palette}
-          client={reportClient}
-          scope={reportScope}
-          refTime={refTime}
-          overview={overview}
-          insights={insights}
-          onClose={() => setReport(false)}
-        />
-      )}
-    </div>
+        <main className="main">
+          {backend.kind === 'demo' && (
+            <div className="callout demo-banner">
+              <b>Modo demonstração</b> — sem Supabase configurado. Contas, senhas e números liberados ficam só neste navegador; configure o <code>.env</code> para usar o
+              login de verdade.
+            </div>
+          )}
+          {tab === 'usuarios' && isAdmin ? (
+            <UsersView
+              lines={dataset?.clinicPhones ?? []}
+              hasUnknownLine={hasUnknownLine}
+              counts={accessCounts}
+              attendants={attendants}
+              hasBase={!!dataset}
+              onUsersChanged={setUsers}
+            />
+          ) : loading ? (
+            <div className="loading-screen">{source ? 'Lendo a planilha online…' : 'Carregando base de mensagens…'}</div>
+          ) : !dataset ? (
+            isAdmin ? (
+              dataView
+            ) : (
+              <NoAccess reason={empty} error={error} />
+            )
+          ) : (
+            <>
+              {tab !== 'dados' && (
+                <FilterBar
+                  filters={filters}
+                  onChange={setFilters}
+                  procedures={procedures}
+                  channels={channels}
+                  classes={classes}
+                  ads={ads}
+                  hasNoAd={hasNoAd}
+                  lines={clinicPhones}
+                  hasUnknownLine={hasUnknownLine}
+                  lineCounts={lineCounts}
+                  attendants={attendants}
+                  refTime={refTime}
+                  range={range}
+                  clients={clients}
+                  clientCounts={clientCounts.counts}
+                  clientTotal={clientCounts.total}
+                  live={source ? live : null}
+                  onRefresh={refreshNow}
+                />
+              )}
+              {selectedClient && allConvs.length === 0 ? (
+                <section className="card no-access" aria-label="Cliente sem conversas">
+                  <Lock size={28} aria-hidden />
+                  <h2>Nenhuma conversa para mostrar</h2>
+                  <p>
+                    {selectedClient.numeros.length === 0
+                      ? `${selectedClient.nome} ainda não tem número liberado. Libere os números dele na aba Usuários.`
+                      : `A planilha atual não tem conversas dos números de ${selectedClient.nome}.`}
+                  </p>
+                </section>
+              ) : (
+                <>
+                  {tab === 'overview' && (
+                    <OverviewView
+                      convs={filtered.convs}
+                      msgs={filtered.messages}
+                      range={range}
+                      meta={meta}
+                      palette={palette}
+                      clinicPhones={clinicPhones}
+                      attendants={attendants}
+                      activeLine={filters.line}
+                      columns={dataset.columns}
+                      classes={classes}
+                      visible={overview}
+                      clientOf={isAdmin ? (line) => clientNames.get(line || SEM_NUMERO) : undefined}
+                      onFilterLine={filterLine}
+                      onOpenConv={openConv}
+                    />
+                  )}
+                  {tab === 'conversas' && (
+                    <ConversationsView
+                      convs={filtered.convs}
+                      allConvs={allConvs}
+                      meta={meta}
+                      onMeta={updateMeta}
+                      selectedKey={selectedKey}
+                      onSelect={setSelectedKey}
+                      refTime={refTime}
+                      multiLine={clinicPhones.length > 1}
+                    />
+                  )}
+                  {tab === 'insights' && insights.size > 0 && (
+                    <InsightsView convs={filtered.convs} msgs={filtered.messages} meta={meta} palette={palette} classes={classes} visible={insights} onOpenConv={openConv} />
+                  )}
+                </>
+              )}
+              {tab === 'dados' && dataView}
+            </>
+          )}
+        </main>
+
+        {report && dataset && (
+          <ReportView
+            convs={filtered.convs}
+            msgs={filtered.messages}
+            range={range}
+            meta={meta}
+            palette={palette}
+            client={reportClient}
+            scope={reportScope}
+            refTime={refTime}
+            classes={classes}
+            overview={overview}
+            insights={insights}
+            onClose={() => setReport(false)}
+          />
+        )}
+      </div>
+    </VocabProvider>
   )
 }
 

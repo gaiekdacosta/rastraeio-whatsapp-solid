@@ -1,7 +1,10 @@
 import type { AppUser } from '../auth/types'
 import { makeCatalog } from './blocks'
 
-/** Blocos da aba Insights que o administrador escolhe mostrar para cada usuário. */
+/**
+ * Blocos da aba Insights que o administrador escolhe mostrar para cada usuário. Os ids ficam gravados nos perfis
+ * e não mudam; nos rótulos, {taxa}, {item}, {empresa}… viram os termos do tipo de negócio (lib/segment.ts).
+ */
 export const INSIGHTS = [
   { id: 'destaques', label: 'Destaques do período', group: 'Resumo' },
   { id: 'indicadores', label: 'Indicadores (resposta, 1ª resposta, engajamento, pedidos)', group: 'Resumo' },
@@ -10,10 +13,10 @@ export const INSIGHTS = [
   { id: 'mapa-calor', label: 'Quando os leads escrevem (dia × hora)', group: 'Gráficos' },
   { id: 'perfil-horario', label: 'Perfil horário das mensagens', group: 'Gráficos' },
   { id: 'pedidos', label: 'O que os leads pedem', group: 'Gráficos' },
-  { id: 'agendamento-procedimento', label: 'Taxa de agendamento por procedimento', group: 'Gráficos' },
+  { id: 'agendamento-procedimento', label: '{taxa} por {item}', group: 'Gráficos' },
   { id: 'canal', label: 'Canal de origem', group: 'Gráficos' },
-  { id: 'agendamento-anuncio', label: 'Taxa de agendamento por anúncio', group: 'Gráficos' },
-  { id: 'aguardando', label: 'Aguardando resposta da clínica', group: 'Listas de leads' },
+  { id: 'agendamento-anuncio', label: '{taxa} por anúncio', group: 'Gráficos' },
+  { id: 'aguardando', label: 'Aguardando resposta da {empresa}', group: 'Listas de leads' },
   { id: 'esfriando', label: 'Leads esfriando', group: 'Listas de leads' },
 ] as const
 

@@ -1,14 +1,23 @@
-import type { AdSource, Channel, Conversation, Filters, Message, Stage, Status, Temperature } from './types'
+import type { AdSource, Channel, Conversation, Filters, Message, Stage, Status } from './types'
 import type { MetaMap } from './storage'
 import { FINAL_STATUSES } from './status'
-import { TEMPERATURE_NONE, TEMPERATURE_ORDER, parseTemperature, temperatureLabel } from './temperature'
+import { SEM_NUMERO } from './access'
+import { CLASS_NONE, CLASS_NONE_LABEL, classKey, classPlural, leadsOf, parseClassification } from './classification'
+import { DEFAULT_SEGMENTO, cap } from './segment'
+import type { Segmento, Vocab } from './segment'
 import { fmtShortDate, fromDateKey, isoWeekKey, toDateKey } from './format'
 
 /* ------------------------------------------------------------------ */
 /* Heurísticas de texto                                                */
 /* ------------------------------------------------------------------ */
 
-const PROCEDURES: { name: string; re: RegExp }[] = [
+interface Item {
+  name: string
+  re: RegExp
+}
+
+/** Procedimentos de clínicas de estética e odontologia. */
+const PROCEDURES: Item[] = [
   { name: 'Facetas de Resina', re: /faceta|lentes? de contato|lentes? dent/i },
   { name: 'Preenchimento Labial', re: /preench\w* labial|labial|l[áa]bios?\b/i },
   { name: 'Full Face', re: /full ?face/i },
@@ -25,6 +34,20 @@ const PROCEDURES: { name: string; re: RegExp }[] = [
   { name: 'Preenchimento', re: /preench/i },
 ]
 
+/** Produtos de loja (moda primeiro, que é o caso mais comum); a primeira categoria que aparecer vale. */
+const PRODUCTS: Item[] = [
+  { name: 'Conjuntos e kits', re: /\bconjuntos?\b|\bkits?\b/i },
+  { name: 'Polos', re: /\bpolos?\b/i },
+  { name: 'Calçados', re: /t[êe]nis|\bsapatos?\b|chinel[ao]s?|sand[áa]lias?|\bslides?\b|\bcrocs\b|\bbotas?\b/i },
+  { name: 'Camisas e blusas', re: /\bcamis(?:a|as|eta|etas)\b|\bblusas?\b|\bregatas?\b/i },
+  { name: 'Calças', re: /\bcal[çc]as?\b|\bjeans\b/i },
+  { name: 'Bermudas e shorts', re: /\bbermudas?\b|\bshorts?\b/i },
+  { name: 'Jaquetas e moletons', re: /jaquetas?|moletons?|casacos?|corta.?ventos?/i },
+  { name: 'Vestidos e saias', re: /\bvestidos?\b|\bsaias?\b|macac[ãa]o|cropped/i },
+  { name: 'Moda íntima', re: /\bcuecas?\b|calcinhas?|suti[ãa]s?|lingerie|\bpijamas?\b/i },
+  { name: 'Acessórios', re: /\bbon[ée]s?\b|rel[óo]gios?|[óo]culos|\bcorrentes?\b|pulseiras?|\bcintos?\b|carteiras?|\bbolsas?\b|mochilas?|chap[ée]us?|perfumes?/i },
+]
+
 const CTA_RE = /tenho interesse (?:n[oa]s?|em|no m[ée]todo)\s+(.+?)\s*[!.?]/i
 const INSTAGRAM_RE = /instagram|\binsta\b|vim do (?:story|stories|reels|perfil)/i
 const PRICE_RE = /\bvalor(?:es)?\b|pre[çc]o|quanto (?:custa|fica|[ée]|t[áa]|sai)|\bcusta\b|or[çc]amento|parcel|\bpix\b/i
@@ -33,9 +56,37 @@ const ADDRESS_RE = /endere[çc]o|onde fica|localiza|fica onde|\blocal\b/i
 const PAYMENT_RE = /\bpix\b|comprovante|pagamento|sinal (?:de|para|do)|\bpagou\b|\bpago\b|\bpaga\b|checkout/i
 const CONFIRMED_RE =
   /agendad|confirmad[oa]|marcad[oa]|sua (?:consulta|avalia[çc][ãa]o) (?:est[áa]|fica|ser[áa])|te espero|esperamos voc[êe]|at[ée] (?:l[áa]|segunda|ter[çc]a|quarta|quinta|sexta|s[áa]bado|amanh[ãa])|hor[áa]rio (?:confirmado|reservado)/i
+/** Loja: o lead quer comprar (tamanho, estoque, entrega, "vou levar"). Perguntar o preço conta à parte (PRICE_RE). */
+const PURCHASE_RE =
+  /tamanho|numera[çc][ãa]o|\b(?:tem|tens|teria|tinha|t[eê]m)\b[^?.!]{0,25}\b(?:no|na|tamanho|cor|cores|dispon\w*|ainda|outra)\b|dispon[ií]ve|estoque|\bquero (?:ess[ae]s?|est[ae]s?|levar|comprar|pegar|o kit|um|uma|dois|duas|\d)|vou (?:querer|levar|pegar|comprar|ficar com)|\bsepara(?:r)? (?:pra|para|ess)|\breserva|entreg[au]|\bfrete\b|retir(?:ar|ada|o)\b|\bvou (?:a[ií]|passar a[ií]|ir a[ií])|como (?:fa[çc]o (?:pra|para) (?:comprar|pedir)|compro)|forma de pagamento|\bcomprar\b/i
+/** Loja: a loja confirmou o pedido (separou, reservou, mandou entregar). */
+const ORDER_RE =
+  /\bseparei\b|\bsepar(?:o|ar|ando) (?:aqui |agora |j[áa] )?(?:pra|para)|deixei (?:tudo |o seu |seu )?separad|j[áa] (?:separei|reservei|enviei)|\breservei\b|pedido (?:confirmado|anotado|separado|registrado|enviado)|seu pedido|saiu para entrega|c[óo]digo de rastreio|motoboy|entregador|a caminho|pode vir (?:buscar|retirar)|te espero|esperamos voc[êe]|obrigad[oa] pela (?:compra|prefer[êe]ncia)|compra confirmada/i
 
-function canonicalProcedure(text: string): string | null {
-  for (const p of PROCEDURES) if (p.re.test(text)) return p.name
+interface Matcher {
+  test(text: string): boolean
+}
+const either = (a: Matcher, b: Matcher): Matcher => ({ test: (t) => a.test(t) || b.test(t) })
+
+/** O que cada tipo de negócio procura nas mensagens (os rótulos ficam em lib/segment.ts). */
+interface Rules {
+  items: Item[]
+  /** Na falta do item nas mensagens do lead, procurar nas respostas da empresa. Loja não: as respostas listam vários produtos. */
+  itemsFromSent: boolean
+  /** Lead mostrou intenção (estágio pediu_agendamento). */
+  intent: Matcher
+  /** Empresa sinalizou o fechamento (estágio agendamento). */
+  closed: Matcher
+}
+
+const RULES: Record<Segmento, Rules> = {
+  clinica: { items: PROCEDURES, itemsFromSent: true, intent: SCHEDULE_RE, closed: CONFIRMED_RE },
+  loja: { items: PRODUCTS, itemsFromSent: false, intent: PURCHASE_RE, closed: ORDER_RE },
+  outro: { items: [], itemsFromSent: false, intent: either(SCHEDULE_RE, PURCHASE_RE), closed: either(CONFIRMED_RE, ORDER_RE) },
+}
+
+function canonicalItem(text: string, items: Item[]): string | null {
+  for (const p of items) if (p.re.test(text)) return p.name
   return null
 }
 
@@ -47,41 +98,44 @@ function titleCase(s: string): string {
     .join(' ')
 }
 
-function inferProcedure(firstReceived: Message | null, received: Message[], sent: Message[]): string {
+/** Procedimento (clínica) ou produto (loja) de interesse do lead. */
+function inferProcedure(firstReceived: Message | null, received: Message[], sent: Message[], rules: Rules): string {
   if (firstReceived) {
     const m = firstReceived.text.match(CTA_RE)
     if (m) {
       const captured = m[1].trim()
-      return canonicalProcedure(captured) ?? titleCase(captured)
+      return canonicalItem(captured, rules.items) ?? titleCase(captured)
     }
   }
   for (const msg of received) {
     if (msg.isMedia) continue
-    const p = canonicalProcedure(msg.text)
+    const p = canonicalItem(msg.text, rules.items)
     if (p) return p
   }
   // Fallback: o que a clínica explicou ao lead costuma nomear o procedimento.
-  for (const msg of sent) {
-    if (msg.isMedia) continue
-    const p = canonicalProcedure(msg.text)
-    if (p) return p
-  }
+  if (rules.itemsFromSent)
+    for (const msg of sent) {
+      if (msg.isMedia) continue
+      const p = canonicalItem(msg.text, rules.items)
+      if (p) return p
+    }
   return 'Não identificado'
 }
 
-function inferChannel(firstReceived: Message | null, received: Message[], startedBy: 'Recebida' | 'Enviada'): Channel {
-  if (firstReceived && CTA_RE.test(firstReceived.text)) return 'Anúncio (CTA)'
+function inferChannel(firstReceived: Message | null, received: Message[], startedBy: 'Recebida' | 'Enviada', hasAd: boolean): Channel {
+  // Anúncio: CTA "tenho interesse…", coluna Anúncio da planilha ou mensagem padrão repetida por vários leads.
+  if ((firstReceived && CTA_RE.test(firstReceived.text)) || hasAd) return 'Anúncio (CTA)'
   if (received.some((m) => INSTAGRAM_RE.test(m.text))) return 'Instagram'
   if (startedBy === 'Enviada') return 'Prospecção ativa'
   return 'Orgânico / outro'
 }
 
-function inferStage(msgs: Message[], received: Message[], sent: Message[]): Stage {
+function inferStage(msgs: Message[], received: Message[], sent: Message[], rules: Rules): Stage {
   if (sent.length === 0) return 'sem_resposta_clinica'
   if (received.length === 0) return 'sem_retorno_lead'
   if (msgs.some((m) => PAYMENT_RE.test(m.text))) return 'pagamento'
-  if (sent.some((m) => CONFIRMED_RE.test(m.text))) return 'agendamento'
-  if (received.some((m) => SCHEDULE_RE.test(m.text))) return 'pediu_agendamento'
+  if (sent.some((m) => rules.closed.test(m.text))) return 'agendamento'
+  if (received.some((m) => rules.intent.test(m.text))) return 'pediu_agendamento'
   let seenSent = false
   for (const m of msgs) {
     if (m.direction === 'Enviada') seenSent = true
@@ -95,7 +149,7 @@ export function isGroupId(phone: string): boolean {
 }
 
 /* ------------------------------------------------------------------ */
-/* Temperatura e anúncio                                               */
+/* Classificação e anúncio                                             */
 /* ------------------------------------------------------------------ */
 
 /** Valor do filtro de anúncio para leads sem anúncio identificado. */
@@ -141,14 +195,14 @@ function inferAd(msgs: Message[], firstReceived: Message | null, templates: Map<
   return { ad: '', adSource: '' }
 }
 
-/** Temperatura atual do lead: o último valor preenchido na coluna Temperatura entre as linhas da conversa. */
-function inferTemperature(msgs: Message[]): Temperature | null {
-  let t: Temperature | null = null
+/** Classificação atual do lead: o último valor preenchido na coluna Classificação entre as linhas da conversa. */
+function inferClassification(msgs: Message[]): string | null {
+  let c: string | null = null
   for (const m of msgs) {
-    const v = parseTemperature(m.temperature)
-    if (v) t = v
+    const v = parseClassification(m.classification)
+    if (v) c = v
   }
-  return t
+  return c
 }
 
 /* ------------------------------------------------------------------ */
@@ -205,7 +259,16 @@ export function attendantsByLine(messages: Message[]): Map<string, string[]> {
   return out
 }
 
-export function buildConversations(messages: Message[], refTime: Date, clinicPhones: string[] = []): Conversation[] {
+/**
+ * `segmentOf` diz o tipo de negócio de cada chave de acesso (número da empresa ou SEM_NUMERO para conversa
+ * sem número): ele escolhe as palavras que as heurísticas procuram (procedimento × produto, agendamento × pedido).
+ */
+export function buildConversations(
+  messages: Message[],
+  refTime: Date,
+  clinicPhones: string[] = [],
+  segmentOf: (accessKey: string) => Segmento = () => DEFAULT_SEGMENTO,
+): Conversation[] {
   const groups = new Map<string, Message[]>()
   for (const m of messages) {
     const key = m.convKey || m.phone
@@ -262,6 +325,9 @@ export function buildConversations(messages: Message[], refTime: Date, clinicPho
     const hoursSinceLast = (refTime.getTime() - last.at.getTime()) / 3600000
     const firstReceived = received[0] ?? null
     const startedBy = msgs[0].direction
+    const lines = conversationLines(sent, clinicPhones)
+    const rules = RULES[segmentOf(lines.line || SEM_NUMERO)] // mesma chave de accessKey()
+    const ad = inferAd(msgs, firstReceived, templates)
 
     const csvStatusCount = new Map<string, number>()
     for (const m of msgs) if (m.statusManual) csvStatusCount.set(m.statusManual, (csvStatusCount.get(m.statusManual) ?? 0) + 1)
@@ -280,7 +346,7 @@ export function buildConversations(messages: Message[], refTime: Date, clinicPho
       name,
       isGroup,
       isInternal: clinicPhones.includes(key),
-      ...conversationLines(sent, clinicPhones),
+      ...lines,
       messages: msgs,
       firstAt: msgs[0].at,
       lastAt: last.at,
@@ -289,11 +355,11 @@ export function buildConversations(messages: Message[], refTime: Date, clinicPho
       media: msgs.filter((m) => m.isMedia).length,
       firstReceived,
       startedBy,
-      procedure: inferProcedure(firstReceived, received, sent),
-      channel: inferChannel(firstReceived, received, startedBy),
-      stage: inferStage(msgs, received, sent),
-      temperature: inferTemperature(msgs),
-      ...inferAd(msgs, firstReceived, templates),
+      procedure: inferProcedure(firstReceived, received, sent, rules),
+      channel: inferChannel(firstReceived, received, startedBy, !!ad.ad),
+      stage: inferStage(msgs, received, sent, rules),
+      classification: inferClassification(msgs),
+      ...ad,
       awaitingReply: last.direction === 'Recebida',
       awaitingHours: last.direction === 'Recebida' ? hoursSinceLast : 0,
       silentHours: last.direction === 'Enviada' ? hoursSinceLast : 0,
@@ -301,7 +367,7 @@ export function buildConversations(messages: Message[], refTime: Date, clinicPho
       medianResponseMin: median(responseTimes),
       responseTimes,
       askedPrice: received.some((m) => PRICE_RE.test(m.text)),
-      askedSchedule: received.some((m) => SCHEDULE_RE.test(m.text)),
+      askedIntent: received.some((m) => rules.intent.test(m.text)),
       askedAddress: received.some((m) => ADDRESS_RE.test(m.text)),
       csvStatus,
     })
@@ -357,7 +423,7 @@ export function applyFilters(
     if (filters.procedure !== 'all' && c.procedure !== filters.procedure) continue
     if (filters.channel !== 'all' && c.channel !== filters.channel) continue
     if (filters.line !== 'all' && c.line !== (filters.line === LINE_NONE ? '' : filters.line)) continue
-    if (filters.temperature !== 'all' && (c.temperature ?? TEMPERATURE_NONE) !== filters.temperature) continue
+    if (filters.classification !== 'all' && (c.classification ?? CLASS_NONE) !== filters.classification) continue
     if (filters.ad !== 'all' && (c.ad || AD_NONE) !== filters.ad) continue
     const st = statusOf(c, meta)
     if (filters.status === 'sem_status' ? st !== undefined : filters.status !== 'all' && st !== filters.status) continue
@@ -480,15 +546,15 @@ const STAGE_RANK: Record<Stage, number> = {
   pagamento: 5,
 }
 
-export function funnel(leads: Conversation[]): FunnelStep[] {
+export function funnel(leads: Conversation[], v: Vocab): FunnelStep[] {
   const wrote = leads.filter((c) => c.received > 0)
   const rank = (c: Conversation) => STAGE_RANK[c.stage]
   return [
     { id: 'wrote', label: 'Leads que escreveram', count: wrote.length, hint: 'Conversas com pelo menos uma mensagem recebida' },
-    { id: 'replied', label: 'Clínica respondeu', count: wrote.filter((c) => c.sent > 0).length, hint: 'Pelo menos uma mensagem enviada pela clínica' },
+    { id: 'replied', label: `${v.Empresa} respondeu`, count: wrote.filter((c) => c.sent > 0).length, hint: `Pelo menos uma mensagem enviada pela ${v.empresa}` },
     { id: 'engaged', label: 'Lead engajou', count: wrote.filter((c) => rank(c) >= 2).length, hint: 'Lead voltou a escrever depois da resposta' },
-    { id: 'asked', label: 'Pediu agendamento', count: wrote.filter((c) => rank(c) >= 3).length, hint: 'Mencionou agendar, avaliação ou horário' },
-    { id: 'scheduled', label: 'Agendamento ou pagamento', count: wrote.filter((c) => rank(c) >= 4).length, hint: 'Clínica confirmou horário, ou houve menção a Pix / sinal' },
+    { id: 'asked', label: v.intencao, count: wrote.filter((c) => rank(c) >= 3).length, hint: v.intencaoCriterio },
+    { id: 'scheduled', label: `${cap(v.fechamento)} ou pagamento`, count: wrote.filter((c) => rank(c) >= 4).length, hint: v.fechamentoCriterio },
   ]
 }
 
@@ -561,7 +627,7 @@ export function scheduleRateBy(leads: Conversation[], meta: MetaMap, fn: (c: Con
     .sort((a, b) => b.rate - a.rate)
 }
 
-/** Agendou: status Agendado/Convertido ou agendamento/pagamento sinalizado na conversa. */
+/** Fechou (agendou, fez pedido): status "agendado"/Convertido ou fechamento/pagamento sinalizado na conversa. */
 export function isScheduled(c: Conversation, meta: MetaMap): boolean {
   const st = statusOf(c, meta)
   return st === 'agendado' || st === 'convertido' || STAGE_RANK[c.stage] >= 4
@@ -575,36 +641,42 @@ export function isSale(c: Conversation, meta: MetaMap): boolean {
   return statusOf(c, meta) === 'convertido'
 }
 
-/** Leads por temperatura, do mais quente ao mais frio, mais "Sem temperatura" no fim (só linhas com valor). */
-export function temperatureCounts(leads: Conversation[]): NamedCount[] {
-  const rows = TEMPERATURE_ORDER.map((t) => ({ name: temperatureLabel(t), value: leads.filter((c) => c.temperature === t).length }))
-  rows.push({ name: temperatureLabel(null), value: leads.filter((c) => !c.temperature).length })
+/** Leads por classificação, na ordem de `classes` (escala primeiro), mais "Sem classificação" no fim (só linhas com valor). */
+export function classificationCounts(leads: Conversation[], classes: string[]): NamedCount[] {
+  const rows = classes.map((c) => ({ name: c, value: leads.filter((l) => l.classification === c).length }))
+  rows.push({ name: CLASS_NONE_LABEL, value: leads.filter((l) => !l.classification).length })
   return rows.filter((r) => r.value > 0)
 }
 
+/** Uma linha por anúncio; cada classificação conta na chave classKey(rótulo). */
 export interface AdRow {
   ad: string
   source: AdSource
   leads: number
-  frio: number
-  morno: number
-  quente: number
-  semTemperatura: number
+  semClassificacao: number
   agendados: number
   vendas: number
   [key: string]: string | number
 }
 
-export type AdMetric = 'leads' | 'quente' | 'morno' | 'frio' | 'agendados' | 'vendas'
+/** 'leads', 'agendados', 'vendas' ou classKey(classificação). */
+export type AdMetric = string
 
-export const AD_METRICS: { id: AdMetric; label: string; short: string }[] = [
-  { id: 'leads', label: 'Mais leads', short: 'Leads' },
-  { id: 'quente', label: 'Mais leads quentes', short: 'Quentes' },
-  { id: 'morno', label: 'Mais leads mornos', short: 'Mornos' },
-  { id: 'frio', label: 'Mais leads frios', short: 'Frios' },
-  { id: 'agendados', label: 'Mais agendamentos', short: 'Agendados' },
-  { id: 'vendas', label: 'Mais vendas', short: 'Vendas' },
-]
+export interface AdMetricOption {
+  id: AdMetric
+  label: string
+  short: string
+}
+
+/** Opções do seletor do ranking: leads, cada classificação da base, fechamentos (agendamentos, pedidos…) e vendas. */
+export function adMetrics(classes: string[], v: Vocab): AdMetricOption[] {
+  return [
+    { id: 'leads', label: 'Mais leads', short: 'Leads' },
+    ...classes.map((c) => ({ id: classKey(c), label: `Mais ${leadsOf(c)}`, short: classPlural(c) })),
+    { id: 'agendados', label: `Mais ${v.fechamentos}`, short: v.fechados },
+    { id: 'vendas', label: 'Mais vendas', short: 'Vendas' },
+  ]
+}
 
 /** Uma linha por anúncio (leads sem anúncio ficam de fora), sem ordenação. */
 export function adSummary(leads: Conversation[], meta: MetaMap): AdRow[] {
@@ -613,21 +685,28 @@ export function adSummary(leads: Conversation[], meta: MetaMap): AdRow[] {
     if (!c.ad) continue
     let r = map.get(c.ad)
     if (!r) {
-      r = { ad: c.ad, source: c.adSource, leads: 0, frio: 0, morno: 0, quente: 0, semTemperatura: 0, agendados: 0, vendas: 0 }
+      r = { ad: c.ad, source: c.adSource, leads: 0, semClassificacao: 0, agendados: 0, vendas: 0 }
       map.set(c.ad, r)
     }
     r.leads++
-    if (c.temperature) r[c.temperature]++
-    else r.semTemperatura++
+    if (c.classification) {
+      const k = classKey(c.classification)
+      r[k] = (Number(r[k]) || 0) + 1
+    } else r.semClassificacao++
     if (isScheduled(c, meta)) r.agendados++
     if (isSale(c, meta)) r.vendas++
   }
   return [...map.values()]
 }
 
+/** Valor de uma métrica numa linha (classificação que o anúncio não teve = 0). */
+export function adValue(row: AdRow, metric: AdMetric): number {
+  return Number(row[metric]) || 0
+}
+
 /** Anúncios ordenados pela métrica escolhida (desempate pelo total de leads e pelo nome). */
 export function rankAds(rows: AdRow[], metric: AdMetric): AdRow[] {
-  return [...rows].sort((a, b) => b[metric] - a[metric] || b.leads - a.leads || a.ad.localeCompare(b.ad, 'pt-BR'))
+  return [...rows].sort((a, b) => adValue(b, metric) - adValue(a, metric) || b.leads - a.leads || a.ad.localeCompare(b.ad, 'pt-BR'))
 }
 
 export function manualStatusCounts(convs: Conversation[], meta: MetaMap, order: Status[], labels: Record<Status, string>): NamedCount[] {

@@ -1,10 +1,11 @@
 import { useMemo } from 'react'
-import { BadgeDollarSign, CalendarCheck, MessageCircleReply, Reply, Timer, Wallet } from 'lucide-react'
+import { BadgeDollarSign, CalendarCheck, MessageCircleReply, Reply, ShoppingCart, Timer, Wallet } from 'lucide-react'
 import type { Conversation, Message } from '../lib/types'
 import type { MetaMap } from '../lib/storage'
 import type { Palette } from '../theme'
 import {
   adSummary,
+  adValue,
   awaitingList,
   coldList,
   countBy,
@@ -19,10 +20,13 @@ import {
   shareWithin,
   stageCount,
 } from '../lib/analytics'
+import type { AdRow } from '../lib/analytics'
 import { WEEKDAYS_LONG, fmtHours, fmtInt, fmtMinutes, fmtPct } from '../lib/format'
-import { STAGE_LABEL } from '../lib/status'
 import { AD_NONE_LABEL } from '../lib/analytics'
+import { classKey, leadsOf } from '../lib/classification'
+import { cap } from '../lib/segment'
 import type { InsightId } from '../lib/insights'
+import { useVocab } from '../vocab'
 import { StatTile } from '../components/StatTile'
 import { ChartCard } from '../components/ChartCard'
 import { Legend } from '../components/ChartTooltip'
@@ -38,18 +42,21 @@ interface Props {
   msgs: Message[]
   meta: MetaMap
   palette: Palette
+  /** Classificações da base inteira (coluna Classificação), escala quente/morno/frio primeiro. */
+  classes: string[]
   /** Blocos que esta pessoa vê (o administrador escolhe por usuário na aba Usuários). */
   visible: Set<InsightId>
   onOpenConv: (key: string) => void
 }
 
-export function InsightsView({ convs, msgs, meta, palette, visible, onOpenConv }: Props) {
+export function InsightsView({ convs, msgs, meta, palette, classes, visible, onOpenConv }: Props) {
   const show = (id: InsightId) => visible.has(id)
+  const v = useVocab()
   const leads = useMemo(() => leadConversations(convs, meta), [convs, meta])
   const wrote = leads.filter((c) => c.received > 0)
   const replied = wrote.filter((c) => c.sent > 0)
   const firstTimes = leads.map((c) => c.firstResponseMin).filter((v): v is number => v != null)
-  const steps = useMemo(() => funnel(leads), [leads])
+  const steps = useMemo(() => funnel(leads, v), [leads, v])
   const buckets = useMemo(() => responseBuckets(firstTimes), [firstTimes])
   const heat = useMemo(() => heatmapReceived(msgs), [msgs])
   const hours = useMemo(() => hourProfile(msgs), [msgs])
@@ -62,7 +69,7 @@ export function InsightsView({ convs, msgs, meta, palette, visible, onOpenConv }
     () => scheduleRateBy(leads, meta, (c) => c.ad || AD_NONE_LABEL).map((r) => ({ name: r.name, value: r.rate, total: r.total, hits: r.hits })),
     [leads, meta],
   )
-  const hasTemperature = leads.some((c) => c.temperature)
+  const hasClassification = leads.some((c) => c.classification)
   const hasAds = leads.some((c) => c.ad)
   const ads = useMemo(() => adSummary(leads, meta), [leads, meta])
   const awaiting = useMemo(() => awaitingList(leads), [leads])
@@ -71,16 +78,16 @@ export function InsightsView({ convs, msgs, meta, palette, visible, onOpenConv }
     () =>
       [
         { name: 'Perguntaram valor / preço', value: wrote.filter((c) => c.askedPrice).length },
-        { name: 'Pediram agendamento', value: wrote.filter((c) => c.askedSchedule).length },
+        { name: cap(v.pediram), value: wrote.filter((c) => c.askedIntent).length },
         { name: 'Pediram endereço', value: wrote.filter((c) => c.askedAddress).length },
         { name: 'Só mídia ou saudação', value: wrote.filter((c) => c.messages.filter((m) => m.direction === 'Recebida').every((m) => m.isMedia || m.text.length < 12)).length },
       ].filter((r) => r.value > 0),
-    [wrote],
+    [wrote, v],
   )
 
   const responseRate = wrote.length ? replied.length / wrote.length : NaN
   const within15 = shareWithin(firstTimes, 15)
-  const askedScheduleShare = wrote.length ? wrote.filter((c) => c.askedSchedule).length / wrote.length : NaN
+  const askedIntentShare = wrote.length ? wrote.filter((c) => c.askedIntent).length / wrote.length : NaN
   const askedPriceShare = wrote.length ? wrote.filter((c) => c.askedPrice).length / wrote.length : NaN
   const paid = stageCount(leads, 'pagamento')
   const scheduledOrPaid = steps[steps.length - 1]?.count ?? 0
@@ -88,32 +95,22 @@ export function InsightsView({ convs, msgs, meta, palette, visible, onOpenConv }
   // destaques automáticos
   const heatFlat = heat.flatMap((row, d) => row.map((v, h) => ({ d, h, v })))
   const peak = heatFlat.reduce((a, b) => (b.v > a.v ? b : a), { d: 0, h: 0, v: 0 })
-  const topProc = countBy(wrote, (c) => c.procedure, 20)[0]
+  // "Não identificado" não é um destaque: vale o item mais procurado entre os identificados.
+  const topProc = countBy(wrote, (c) => c.procedure, 20).find((r) => r.name !== 'Não identificado' && r.name !== 'Outros')
   const dayTotals = heat.map((row, d) => ({ name: WEEKDAYS_LONG[d], value: row.reduce((a, b) => a + b, 0), peak: row.indexOf(Math.max(...row)) }))
   const highlights: string[] = []
   if (topProc && wrote.length) highlights.push(`${topProc.name} concentra ${fmtPct(topProc.value / wrote.length)} dos leads que escreveram.`)
   if (peak.v > 0) highlights.push(`Pico de demanda: ${WEEKDAYS_LONG[peak.d]} às ${peak.h}h, com ${fmtInt(peak.v)} mensagens recebidas no período.`)
   if (Number.isFinite(responseRate)) highlights.push(`${fmtPct(responseRate)} dos leads receberam resposta; mediana da primeira resposta de ${fmtMinutes(median(firstTimes))}.`)
-  if (Number.isFinite(askedPriceShare)) highlights.push(`${fmtPct(askedPriceShare)} perguntaram valor e ${fmtPct(askedScheduleShare)} pediram agendamento ou avaliação.`)
-  if (awaiting.length) highlights.push(`${fmtInt(awaiting.length)} leads estão com a última mensagem sem resposta da clínica.`)
-  if (hasTemperature && leads.length) {
-    const hot = leads.filter((c) => c.temperature === 'quente').length
-    const warm = leads.filter((c) => c.temperature === 'morno').length
-    highlights.push(`${fmtPct(hot / leads.length)} dos leads estão quentes e ${fmtPct(warm / leads.length)} mornos, segundo a planilha.`)
-  }
-  if (hasAds && ads.length) {
-    const top = rankAds(ads, 'leads')[0]
-    const topHot = hasTemperature ? rankAds(ads, 'quente')[0] : null
-    const topSales = rankAds(ads, 'vendas')[0]
-    let line = `O anúncio “${top.ad}” é o que mais gera leads (${fmtInt(top.leads)})`
-    if (topHot && topHot.quente > 0) line += topHot.ad === top.ad ? ` e também o que mais gera leads quentes (${fmtInt(topHot.quente)})` : `; “${topHot.ad}” é o que mais gera leads quentes (${fmtInt(topHot.quente)})`
-    if (topSales.vendas > 0) line += `; “${topSales.ad}” é o que mais gera vendas (${fmtInt(topSales.vendas)})`
-    highlights.push(`${line}.`)
-  }
+  if (Number.isFinite(askedPriceShare)) highlights.push(`${fmtPct(askedPriceShare)} perguntaram valor e ${fmtPct(askedIntentShare)} ${v.pediram}.`)
+  if (awaiting.length) highlights.push(`${fmtInt(awaiting.length)} leads estão com a última mensagem sem resposta da ${v.empresa}.`)
+  const classLine = classHighlight(leads, classes)
+  if (hasClassification && classLine) highlights.push(classLine)
+  if (hasAds && ads.length) highlights.push(adHighlight(ads, hasClassification ? classes : []))
 
   const hourSeries = [
     { key: 'recebidas', label: 'Recebidas (leads)', color: palette.series1 },
-    { key: 'enviadas', label: 'Enviadas (clínica)', color: palette.series2 },
+    { key: 'enviadas', label: `Enviadas (${v.empresa})`, color: palette.series2 },
   ]
 
   return (
@@ -131,12 +128,17 @@ export function InsightsView({ convs, msgs, meta, palette, visible, onOpenConv }
 
       {show('indicadores') && (
         <div className="grid grid-kpi">
-          <StatTile icon={<Reply size={14} />} label="Taxa de resposta da clínica" value={fmtPct(responseRate)} hint={`${fmtInt(wrote.length - replied.length)} leads nunca receberam resposta`} tone={wrote.length - replied.length > 0 ? 'bad' : 'good'} />
+          <StatTile icon={<Reply size={14} />} label={`Taxa de resposta da ${v.empresa}`} value={fmtPct(responseRate)} hint={`${fmtInt(wrote.length - replied.length)} leads nunca receberam resposta`} tone={wrote.length - replied.length > 0 ? 'bad' : 'good'} />
           <StatTile icon={<Timer size={14} />} label="Mediana da 1ª resposta" value={fmtMinutes(median(firstTimes))} hint={Number.isFinite(within15) ? `${fmtPct(within15)} em até 15 min` : '—'} tone={within15 >= 0.5 ? 'good' : undefined} />
           <StatTile icon={<MessageCircleReply size={14} />} label="Leads que engajaram" value={fmtPct(wrote.length ? (steps[2]?.count ?? 0) / wrote.length : NaN)} hint="voltaram a escrever após a resposta" />
-          <StatTile icon={<CalendarCheck size={14} />} label="Pediram agendamento" value={fmtPct(askedScheduleShare)} hint={`${fmtInt(wrote.filter((c) => c.askedSchedule).length)} leads`} />
+          <StatTile
+            icon={v.segmento === 'clinica' ? <CalendarCheck size={14} /> : <ShoppingCart size={14} />}
+            label={cap(v.pediram)}
+            value={fmtPct(askedIntentShare)}
+            hint={`${fmtInt(wrote.filter((c) => c.askedIntent).length)} leads`}
+          />
           <StatTile icon={<BadgeDollarSign size={14} />} label="Perguntaram valor" value={fmtPct(askedPriceShare)} hint={`${fmtInt(wrote.filter((c) => c.askedPrice).length)} leads`} />
-          <StatTile icon={<Wallet size={14} />} label="Agendamento ou pagamento" value={fmtInt(scheduledOrPaid)} hint={`${fmtInt(paid)} com pagamento sinalizado`} tone={paid ? 'good' : undefined} />
+          <StatTile icon={<Wallet size={14} />} label={`${cap(v.fechamento)} ou pagamento`} value={fmtInt(scheduledOrPaid)} hint={`${fmtInt(paid)} com pagamento sinalizado`} tone={paid ? 'good' : undefined} />
         </div>
       )}
 
@@ -159,7 +161,7 @@ export function InsightsView({ convs, msgs, meta, palette, visible, onOpenConv }
         {show('tempo-resposta') && (
           <ChartCard
             title="Tempo até a primeira resposta"
-            subtitle="Distribuição do intervalo entre a 1ª mensagem do lead e a 1ª resposta da clínica"
+            subtitle={`Distribuição do intervalo entre a 1ª mensagem do lead e a 1ª resposta da ${v.empresa}`}
             rows={buckets}
             columns={[
               { key: 'label', label: 'Faixa' },
@@ -219,20 +221,20 @@ export function InsightsView({ convs, msgs, meta, palette, visible, onOpenConv }
 
         {show('agendamento-procedimento') && (
           <ChartCard
-            title="Taxa de agendamento por procedimento"
-            subtitle="Leads com agendamento/pagamento sinalizado ou status Agendado/Convertido (mínimo de 5 leads)"
+            title={`${v.taxa} por ${v.item}`}
+            subtitle={`Leads com ${v.fechamento}/pagamento sinalizado ou status ${v.status.agendado}/Convertido (mínimo de 5 leads)`}
             rows={rateByProc}
             columns={[
-              { key: 'name', label: 'Procedimento' },
+              { key: 'name', label: v.Item },
               { key: 'total', label: 'Leads', numeric: true },
-              { key: 'hits', label: 'Agendaram', numeric: true },
-              { key: 'value', label: 'Taxa', numeric: true, format: (v) => fmtPct(Number(v)) },
+              { key: 'hits', label: v.fecharam, numeric: true },
+              { key: 'value', label: 'Taxa', numeric: true, format: (x) => fmtPct(Number(x)) },
             ]}
-            emptyText="Ainda não há procedimentos com pelo menos 5 leads no período."
+            emptyText={`Ainda não há ${v.itens} com pelo menos 5 leads no período.`}
           >
             <HBars
               data={rateByProc}
-              label="Taxa de agendamento"
+              label={v.taxa}
               palette={palette}
               format={(v, row) => (row ? `${fmtPct(v)} (${fmtInt(Number(row.hits))} de ${fmtInt(Number(row.total))})` : fmtPct(v))}
             />
@@ -242,7 +244,7 @@ export function InsightsView({ convs, msgs, meta, palette, visible, onOpenConv }
         {show('canal') && (
           <ChartCard
             title="Canal de origem"
-            subtitle="Anúncio = mensagem padrão do CTA; Instagram = lead citou a rede; Prospecção = clínica iniciou"
+            subtitle={`Anúncio = coluna Anúncio ou mensagem padrão do anúncio; Instagram = lead citou a rede; Prospecção = ${v.empresa} iniciou`}
             rows={byChannel}
             columns={[
               { key: 'name', label: 'Canal' },
@@ -255,14 +257,14 @@ export function InsightsView({ convs, msgs, meta, palette, visible, onOpenConv }
 
         {show('agendamento-anuncio') && (
           <ChartCard
-            title="Taxa de agendamento por anúncio"
-            subtitle="Leads com agendamento/pagamento sinalizado ou status Agendado/Convertido, por anúncio de origem (mínimo de 5 leads)"
+            title={`${v.taxa} por anúncio`}
+            subtitle={`Leads com ${v.fechamento}/pagamento sinalizado ou status ${v.status.agendado}/Convertido, por anúncio de origem (mínimo de 5 leads)`}
             rows={rateByAd}
             columns={[
               { key: 'name', label: 'Anúncio' },
               { key: 'total', label: 'Leads', numeric: true },
-              { key: 'hits', label: 'Agendaram', numeric: true },
-              { key: 'value', label: 'Taxa', numeric: true, format: (v) => fmtPct(Number(v)) },
+              { key: 'hits', label: v.fecharam, numeric: true },
+              { key: 'value', label: 'Taxa', numeric: true, format: (x) => fmtPct(Number(x)) },
             ]}
             emptyText={
               hasAds
@@ -272,7 +274,7 @@ export function InsightsView({ convs, msgs, meta, palette, visible, onOpenConv }
           >
             <HBars
               data={rateByAd}
-              label="Taxa de agendamento"
+              label={v.taxa}
               palette={palette}
               labelWidth={190}
               format={(v, row) => (row ? `${fmtPct(v)} (${fmtInt(Number(row.hits))} de ${fmtInt(Number(row.total))})` : fmtPct(v))}
@@ -284,7 +286,7 @@ export function InsightsView({ convs, msgs, meta, palette, visible, onOpenConv }
           <section className="card" aria-label="Aguardando resposta">
             <div className="card-head">
               <div>
-                <h3 className="card-title">Aguardando resposta da clínica</h3>
+                <h3 className="card-title">Aguardando resposta da {v.empresa}</h3>
                 <p className="card-sub">Última mensagem foi do lead · {fmtInt(awaiting.length)} conversas</p>
               </div>
             </div>
@@ -297,7 +299,9 @@ export function InsightsView({ convs, msgs, meta, palette, visible, onOpenConv }
             <div className="card-head">
               <div>
                 <h3 className="card-title">Leads esfriando</h3>
-                <p className="card-sub">Engajaram ou pediram agendamento, a clínica respondeu e há mais de 48h sem retorno · {fmtInt(cold.length)}</p>
+                <p className="card-sub">
+                  Engajaram ou {v.pediram}, a {v.empresa} respondeu e há mais de 48h sem retorno · {fmtInt(cold.length)}
+                </p>
               </div>
             </div>
             <LeadTable rows={cold.slice(0, 15)} meta={meta} onOpen={onOpenConv} timeLabel="Em silêncio há" time={(c) => fmtHours(c.silentHours)} empty="Nenhum lead esfriando. Bom sinal." />
@@ -323,6 +327,7 @@ function LeadTable({
   time: (c: Conversation) => string
   empty: string
 }) {
+  const v = useVocab()
   if (rows.length === 0) return <div className="empty">{empty}</div>
   return (
     <div className="table-scroll" style={{ maxHeight: 420 }}>
@@ -330,7 +335,7 @@ function LeadTable({
         <thead>
           <tr>
             <th>Lead</th>
-            <th>Procedimento</th>
+            <th>{v.Item}</th>
             <th>Estágio</th>
             <th className="num">{timeLabel}</th>
             <th>Status</th>
@@ -338,7 +343,7 @@ function LeadTable({
         </thead>
         <tbody>
           {rows.map((c) => (
-            <tr key={c.key} className="clickable" onClick={() => onOpen(c.key)} title={`Abrir conversa · ${STAGE_LABEL[c.stage]}`}>
+            <tr key={c.key} className="clickable" onClick={() => onOpen(c.key)} title={`Abrir conversa · ${v.stage[c.stage]}`}>
               <td className="truncate narrow">{c.name}</td>
               <td className="truncate narrow">{c.procedure}</td>
               <td>
@@ -354,4 +359,30 @@ function LeadTable({
       </table>
     </div>
   )
+}
+
+/** "40% dos leads estão quentes e 25% mornos" ou, com outras classificações, a mais comum. */
+export function classHighlight(leads: Conversation[], classes: string[]): string | null {
+  if (!leads.length || !classes.length) return null
+  const count = (c: string) => leads.filter((l) => l.classification === c).length
+  if (classes.includes('Quente')) {
+    const warm = classes.includes('Morno') ? ` e ${fmtPct(count('Morno') / leads.length)} mornos` : ''
+    return `${fmtPct(count('Quente') / leads.length)} dos leads estão quentes${warm}, segundo a planilha.`
+  }
+  const top = classes.map((c) => ({ c, n: count(c) })).sort((a, b) => b.n - a.n)[0]
+  return top.n ? `A classificação mais comum é “${top.c}”, com ${fmtPct(top.n / leads.length)} dos leads.` : null
+}
+
+/** Anúncio que mais gera leads, leads quentes (ou da classificação mais comum) e vendas. */
+export function adHighlight(ads: AdRow[], classes: string[]): string {
+  const top = rankAds(ads, 'leads')[0]
+  const cls = classes.includes('Quente') ? 'Quente' : classes[0]
+  const topCls = cls ? rankAds(ads, classKey(cls))[0] : null
+  const nCls = topCls ? adValue(topCls, classKey(cls)) : 0
+  const what = cls ? leadsOf(cls) : ''
+  const topSales = rankAds(ads, 'vendas')[0]
+  let line = `O anúncio “${top.ad}” é o que mais gera leads (${fmtInt(top.leads)})`
+  if (topCls && nCls > 0) line += topCls.ad === top.ad ? ` e também ${what} (${fmtInt(nCls)})` : `; “${topCls.ad}” é o que mais gera ${what} (${fmtInt(nCls)})`
+  if (topSales.vendas > 0) line += `; “${topSales.ad}” é o que mais gera vendas (${fmtInt(topSales.vendas)})`
+  return `${line}.`
 }

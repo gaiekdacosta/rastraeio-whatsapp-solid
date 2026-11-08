@@ -7,6 +7,8 @@ import type { AppUser, Papel, PerfilPatch } from '../auth/types'
 import { SEM_NUMERO } from '../lib/access'
 import { fullPanel, panelDetail, panelOf, panelSummary, storePanel } from '../lib/panel'
 import type { PanelSelection } from '../lib/panel'
+import { DEFAULT_SEGMENTO, SEGMENTOS, SEGMENTO_HINT, SEGMENTO_LABEL, vocabFor } from '../lib/segment'
+import type { Segmento } from '../lib/segment'
 import { fmtInt, fmtLine } from '../lib/format'
 import { useLineNames } from '../lineNames'
 import { Modal } from '../components/Modal'
@@ -26,6 +28,9 @@ interface Props {
   /** Avisa o App quando a lista de contas muda (o filtro Clientes do topo nasce dela). */
   onUsersChanged?: (users: AppUser[]) => void
 }
+
+/** Contas da mesma empresa são o mesmo cliente (lib/clients.ts): o tipo de negócio vale para todas. */
+const sameEmpresa = (a: string, b: string) => !!a.trim() && a.trim().toLocaleLowerCase('pt-BR') === b.trim().toLocaleLowerCase('pt-BR')
 
 interface Column {
   key: string
@@ -108,6 +113,15 @@ export function UsersView({ lines, hasUnknownLine, counts, attendants, hasBase, 
 
   const changePapel = (u: AppUser, papel: Papel) => void run(u.id, () => backend.updateUser(u.id, { papel }))
 
+  const changeSegmento = (u: AppUser, segmento: Segmento) => {
+    const targets = (users ?? []).filter((x) => x.id === u.id || (x.papel === 'usuario' && sameEmpresa(x.empresa, u.empresa)))
+    const ids = new Set(targets.map((t) => t.id))
+    setUsers((list) => list?.map((x) => (ids.has(x.id) ? { ...x, segmento } : x)) ?? null) // otimista; reload corrige se falhar
+    void run(u.id, async () => {
+      for (const t of targets) if (t.segmento !== segmento) await backend.updateUser(t.id, { segmento })
+    })
+  }
+
   const savePanel = (u: AppUser, selected: PanelSelection) => {
     const patch = storePanel(selected)
     setUsers((list) => list?.map((x) => (x.id === u.id ? { ...x, ...patch } : x)) ?? null) // otimista; reload corrige se falhar
@@ -128,8 +142,9 @@ export function UsersView({ lines, hasUnknownLine, counts, attendants, hasBase, 
           <div>
             <h3 className="card-title">Usuários e números liberados</h3>
             <p className="card-sub">
-              Marque os números da planilha que cada usuário pode ver e, em <b>Painel</b>, escolha os blocos da Visão geral e dos Insights que aparecem para
-              ele. Ele só recebe as conversas desses números; administradores veem tudo. A mudança vale no próximo acesso da pessoa (ou ao recarregar a página).
+              Marque os números da planilha que cada usuário pode ver, o tipo de <b>Negócio</b> da empresa dele (muda os termos: procedimento ou produto,
+              agendamento ou pedido) e, em <b>Painel</b>, escolha os blocos da Visão geral e dos Insights que aparecem para ele. Ele só recebe as conversas
+              desses números; administradores veem tudo. A mudança vale no próximo acesso da pessoa (ou ao recarregar a página).
             </p>
           </div>
           <div className="card-actions">
@@ -164,6 +179,7 @@ export function UsersView({ lines, hasUnknownLine, counts, attendants, hasBase, 
                 <tr>
                   <th>Usuário</th>
                   <th>Perfil</th>
+                  <th title="Tipo de negócio da empresa: muda os termos e o que o painel procura nas conversas. Vale para todas as contas da mesma empresa.">Negócio</th>
                   <th title="Blocos da Visão geral e da aba Insights que a pessoa vê">Painel</th>
                   {columns.map((c) => (
                     <th key={c.key} className={`access-col${c.stale ? ' stale' : ''}`} title={c.key === SEM_NUMERO ? 'A planilha não diz para qual número escreveram os leads que nunca receberam resposta' : fmtLine(c.key)}>
@@ -214,6 +230,28 @@ export function UsersView({ lines, hasUnknownLine, counts, attendants, hasBase, 
                           <option value="usuario">{PAPEL_LABEL.usuario}</option>
                           <option value="admin">{PAPEL_LABEL.admin}</option>
                         </select>
+                      </td>
+                      <td>
+                        {u.papel === 'admin' ? (
+                          <span className="muted" title="Administradores veem cada cliente com os termos dele">
+                            —
+                          </span>
+                        ) : (
+                          <select
+                            className="inline-select"
+                            aria-label={`Tipo de negócio de ${u.nome || u.email}`}
+                            value={u.segmento}
+                            disabled={isBusy}
+                            title={u.empresa ? `${SEGMENTO_HINT[u.segmento]} · vale para todas as contas de ${u.empresa}` : SEGMENTO_HINT[u.segmento]}
+                            onChange={(e) => changeSegmento(u, e.target.value as Segmento)}
+                          >
+                            {SEGMENTOS.map((sg) => (
+                              <option key={sg} value={sg}>
+                                {SEGMENTO_LABEL[sg]}
+                              </option>
+                            ))}
+                          </select>
+                        )}
                       </td>
                       <td>
                         {u.papel === 'admin' ? (
@@ -279,7 +317,7 @@ export function UsersView({ lines, hasUnknownLine, counts, attendants, hasBase, 
               {users && users.length > 0 && columns.length > 0 && (
                 <tfoot>
                   <tr>
-                    <td colSpan={3} className="muted">
+                    <td colSpan={4} className="muted">
                       Pessoas com acesso
                     </td>
                     {columns.map((c) => (
@@ -296,7 +334,7 @@ export function UsersView({ lines, hasUnknownLine, counts, attendants, hasBase, 
         )}
       </section>
 
-      <NewUserCard columns={columns.filter((c) => !c.stale)} onCreated={() => void reload()} />
+      <NewUserCard columns={columns.filter((c) => !c.stale)} users={users ?? []} onCreated={() => void reload()} />
 
       {pickingPanel && <PanelModal user={pickingPanel} onClose={() => setPickingPanel(null)} onSave={(selected) => savePanel(pickingPanel, selected)} />}
 
@@ -314,7 +352,7 @@ export function UsersView({ lines, hasUnknownLine, counts, attendants, hasBase, 
   )
 }
 
-function NewUserCard({ columns, onCreated }: { columns: Column[]; onCreated: () => void }) {
+function NewUserCard({ columns, users, onCreated }: { columns: Column[]; users: AppUser[]; onCreated: () => void }) {
   const { backend } = useSession()
   const [nome, setNome] = useState('')
   const [email, setEmail] = useState('')
@@ -322,7 +360,13 @@ function NewUserCard({ columns, onCreated }: { columns: Column[]; onCreated: () 
   const [papel, setPapel] = useState<Papel>('usuario')
   const [numeros, setNumeros] = useState<string[]>([])
   const [empresa, setEmpresa] = useState('')
+  const [segmento, setSegmento] = useState<Segmento>(DEFAULT_SEGMENTO)
   const [panel, setPanel] = useState<PanelSelection>(fullPanel)
+  // Empresa que já tem conta: a nova conta é do mesmo cliente, então nasce com o mesmo tipo de negócio.
+  const existing = users.find((u) => u.papel === 'usuario' && sameEmpresa(u.empresa, empresa))
+  useEffect(() => {
+    if (existing) setSegmento(existing.segmento)
+  }, [existing])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [created, setCreated] = useState<{ nome: string; email: string; senha: string } | null>(null)
@@ -342,6 +386,7 @@ function NewUserCard({ columns, onCreated }: { columns: Column[]; onCreated: () 
         papel,
         numeros: isUser ? numeros : [],
         empresa: isUser ? empresa.trim() : '',
+        segmento: isUser ? segmento : DEFAULT_SEGMENTO,
         ...(isUser ? storePanel(panel) : { visaoGeral: null, insights: null }),
       })
       setCreated({ nome: nome.trim(), email: email.trim().toLowerCase(), senha })
@@ -352,6 +397,7 @@ function NewUserCard({ columns, onCreated }: { columns: Column[]; onCreated: () 
       setPapel('usuario')
       setNumeros([])
       setEmpresa('')
+      setSegmento(DEFAULT_SEGMENTO)
       setPanel(fullPanel())
       onCreated()
     } catch (err) {
@@ -420,7 +466,20 @@ function NewUserCard({ columns, onCreated }: { columns: Column[]; onCreated: () 
         {papel === 'usuario' && (
           <div className="field">
             <label htmlFor="nu-empresa">Empresa (aparece no topo do painel)</label>
-            <input id="nu-empresa" value={empresa} onChange={(e) => setEmpresa(e.target.value)} maxLength={80} autoComplete="off" placeholder="Ex.: Império 085" />
+            <input id="nu-empresa" value={empresa} onChange={(e) => setEmpresa(e.target.value)} maxLength={80} autoComplete="off" placeholder="Ex.: Loja Centro" />
+          </div>
+        )}
+        {papel === 'usuario' && (
+          <div className="field">
+            <label htmlFor="nu-segmento">Tipo de negócio</label>
+            <select id="nu-segmento" value={segmento} onChange={(e) => setSegmento(e.target.value as Segmento)} disabled={!!existing}>
+              {SEGMENTOS.map((sg) => (
+                <option key={sg} value={sg}>
+                  {SEGMENTO_LABEL[sg]} — {SEGMENTO_HINT[sg].toLowerCase()}
+                </option>
+              ))}
+            </select>
+            {existing && <span className="small muted">Mesmo tipo das outras contas de {existing.empresa}; para mudar, use a coluna Negócio da tabela.</span>}
           </div>
         )}
         <fieldset className="field span-all">
@@ -453,7 +512,7 @@ function NewUserCard({ columns, onCreated }: { columns: Column[]; onCreated: () 
         {papel === 'usuario' && (
           <fieldset className="field span-all">
             <legend className="field-label">Painel que a pessoa vê</legend>
-            <PanelPicker value={panel} onChange={setPanel} />
+            <PanelPicker value={panel} onChange={setPanel} vocab={vocabFor(segmento)} />
           </fieldset>
         )}
         {error && (
@@ -513,7 +572,7 @@ function EditUserModal({ user, onClose, onSaved }: { user: AppUser; onClose: () 
         {user.papel === 'usuario' && (
           <div className="field">
             <label htmlFor="eu-empresa">Empresa (aparece no topo do painel)</label>
-            <input id="eu-empresa" value={empresa} onChange={(e) => setEmpresa(e.target.value)} maxLength={80} placeholder="Ex.: Império 085" />
+            <input id="eu-empresa" value={empresa} onChange={(e) => setEmpresa(e.target.value)} maxLength={80} placeholder="Ex.: Loja Centro" />
           </div>
         )}
         <PasswordField id="eu-senha" label="Nova senha (deixe em branco para manter)" value={senha} onChange={setSenha} autoComplete="new-password" canGenerate />
@@ -554,7 +613,7 @@ function PanelModal({ user, onClose, onSave }: { user: AppUser; onClose: () => v
         </p>
         <fieldset className="field">
           <legend className="sr-only">Painel que a pessoa vê</legend>
-          <PanelPicker value={selected} onChange={setSelected} />
+          <PanelPicker value={selected} onChange={setSelected} vocab={vocabFor(user.segmento)} />
         </fieldset>
         <div className="form-actions">
           <button type="button" className="btn ghost" onClick={onClose}>

@@ -2,11 +2,12 @@ import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { ChevronLeft, ExternalLink, Megaphone, Phone, Search } from 'lucide-react'
 import type { Conversation, ConvMeta, Status } from '../lib/types'
 import type { MetaMap } from '../lib/storage'
-import { STATUS_LABEL, STATUS_ORDER } from '../lib/status'
+import { STATUS_ORDER } from '../lib/status'
 import { fmtDateKey, fmtDateTime, fmtHours, fmtInt, fmtLine, fmtMinutes, fmtPhone, fmtShortDate, fmtTime, toDateKey } from '../lib/format'
-import { StageBadge, StatusBadge, TemperatureBadge } from '../components/StatusBadge'
+import { ClassificationBadge, StageBadge, StatusBadge } from '../components/StatusBadge'
 import { useMediaQuery } from '../hooks'
 import { useLineNames } from '../lineNames'
+import { useVocab } from '../vocab'
 
 type Sort = 'recent' | 'oldest' | 'messages' | 'waiting'
 
@@ -29,13 +30,14 @@ export function ConversationsView({ convs, allConvs, meta, onMeta, selectedKey, 
   const [sort, setSort] = useState<Sort>('recent')
   const isWide = useMediaQuery('(min-width: 960px)')
   const { names, label } = useLineNames()
+  const v = useVocab()
 
   const index = useMemo(
     () =>
       new Map(
         allConvs.map((c) => [
           c.key,
-          `${c.name} ${c.phone} ${c.lines.join(' ')} ${c.procedure} ${c.ad} ${c.messages.map((m) => m.text).join(' ')}`.toLowerCase(),
+          `${c.name} ${c.phone} ${c.lines.join(' ')} ${c.procedure} ${c.ad} ${c.classification ?? ''} ${c.messages.map((m) => m.text).join(' ')}`.toLowerCase(),
         ]),
       ),
     [allConvs],
@@ -124,7 +126,7 @@ export function ConversationsView({ convs, allConvs, meta, onMeta, selectedKey, 
                   onClick={() => onSelect(c.key)}
                 >
                   <span className="name">
-                    {c.awaitingReply && <i className="dot alert" title="Aguardando resposta da clínica" />}
+                    {c.awaitingReply && <i className="dot alert" title={`Aguardando resposta da ${v.empresa}`} />}
                     {c.name}
                   </span>
                   <span className="when">{last.dateKey === todayKey ? fmtTime(last.at) : fmtShortDate(last.at)}</span>
@@ -134,7 +136,7 @@ export function ConversationsView({ convs, allConvs, meta, onMeta, selectedKey, 
                   </span>
                   <span className="meta">
                     <StatusBadge small status={st} />
-                    <TemperatureBadge small temperature={c.temperature} />
+                    <ClassificationBadge small value={c.classification} />
                     <span className="badge sm outline">{c.procedure}</span>
                     {multiLine && (
                       <span className="badge sm outline" title="Número da empresa que atendeu">
@@ -188,6 +190,7 @@ function Detail({
 }) {
   const threadRef = useRef<HTMLDivElement>(null)
   const { label, isRenamed } = useLineNames()
+  const v = useVocab()
   useEffect(() => {
     const el = threadRef.current
     if (el) el.scrollTop = el.scrollHeight
@@ -209,7 +212,7 @@ function Detail({
           </div>
           <div className="tags">
             <StatusBadge status={meta.status} />
-            <TemperatureBadge temperature={conv.temperature} />
+            <ClassificationBadge value={conv.classification} />
             <StageBadge stage={conv.stage} />
             {multiLine && (
               <span className="badge outline" title="Número da empresa que mais respondeu nesta conversa">
@@ -252,7 +255,7 @@ function Detail({
             <option value="">Sem status</option>
             {STATUS_ORDER.map((s) => (
               <option key={s} value={s}>
-                {STATUS_LABEL[s]}
+                {v.status[s]}
               </option>
             ))}
           </select>
@@ -294,7 +297,7 @@ function Detail({
             aguardando resposta há <b>{fmtHours(conv.awaitingHours)}</b>
           </span>
         )}
-        {meta.updatedAt && <span className="muted">classificado em {fmtDateTime(new Date(meta.updatedAt))}</span>}
+        {meta.updatedAt && <span className="muted">status salvo em {fmtDateTime(new Date(meta.updatedAt))}</span>}
       </div>
 
       <div className="thread" ref={threadRef} aria-label="Mensagens">
@@ -308,7 +311,7 @@ function Detail({
               <div className={`bubble${out ? ' out' : ''}${m.isMedia ? ' media' : ''}`}>
                 {m.isMedia ? 'Mídia (imagem, áudio ou documento)' : m.text}
                 <span className="time">
-                  {out ? (multiLine ? `${m.lead || 'Empresa'} · ${label(m.phone)} · ` : 'Clínica · ') : `${m.lead || 'Lead'} · `}
+                  {out ? (multiLine ? `${m.lead || v.Empresa} · ${label(m.phone)} · ` : `${v.Empresa} · `) : `${m.lead || 'Lead'} · `}
                   {fmtTime(m.at)}
                 </span>
               </div>

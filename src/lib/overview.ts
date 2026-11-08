@@ -1,25 +1,29 @@
 import type { AppUser } from '../auth/types'
 import { makeCatalog } from './blocks'
 
-/** Blocos da aba Visão geral que o administrador escolhe mostrar para cada usuário. */
+/**
+ * Blocos da aba Visão geral que o administrador escolhe mostrar para cada usuário. Os ids ficam gravados nos
+ * perfis: não mudam mesmo quando o bloco muda de nome (ex.: "temperatura" é o bloco de Classificação). Nos
+ * rótulos, {empresa}, {Itens}, {fechamentos}… viram os termos do tipo de negócio (lib/segment.ts, fillVocab).
+ */
 export const OVERVIEW = [
   { id: 'leads', label: 'Conversas de leads', group: 'Indicadores' },
   { id: 'novos-leads', label: 'Novos leads no período', group: 'Indicadores' },
   { id: 'recebidas', label: 'Mensagens recebidas', group: 'Indicadores' },
   { id: 'enviadas', label: 'Mensagens enviadas', group: 'Indicadores' },
   { id: 'primeira-resposta', label: 'Mediana da 1ª resposta', group: 'Indicadores' },
-  { id: 'aguardando-resposta', label: 'Aguardando resposta da clínica', group: 'Indicadores' },
+  { id: 'aguardando-resposta', label: 'Aguardando resposta da {empresa}', group: 'Indicadores' },
   { id: 'sem-status', label: 'Sem status manual', group: 'Indicadores' },
-  { id: 'leads-quentes', label: 'Leads quentes (só com a coluna Temperatura na planilha)', group: 'Indicadores' },
+  { id: 'leads-quentes', label: 'Leads quentes ou classificados (só com a coluna Classificação na planilha)', group: 'Indicadores' },
   { id: 'atendimento-numero', label: 'Atendimento por número (só com mais de um número liberado)', group: 'Gráficos e tabelas' },
   { id: 'mensagens-dia', label: 'Mensagens por dia', group: 'Gráficos e tabelas' },
   { id: 'leads-semana', label: 'Novos leads por semana', group: 'Gráficos e tabelas' },
-  { id: 'procedimentos', label: 'Procedimentos de interesse', group: 'Gráficos e tabelas' },
+  { id: 'procedimentos', label: '{Itens} de interesse', group: 'Gráficos e tabelas' },
   { id: 'estagio', label: 'Estágio inferido das conversas', group: 'Gráficos e tabelas' },
   { id: 'status-manual', label: 'Status manual', group: 'Gráficos e tabelas' },
-  { id: 'temperatura', label: 'Temperatura dos leads (frio, morno, quente)', group: 'Gráficos e tabelas' },
-  { id: 'anuncios', label: 'Anúncios: ranking por leads, temperatura, agendamentos e vendas', group: 'Gráficos e tabelas' },
-  { id: 'aguardando', label: 'Leads aguardando resposta da clínica', group: 'Listas de leads' },
+  { id: 'temperatura', label: 'Classificação dos leads (coluna Classificação da planilha)', group: 'Gráficos e tabelas' },
+  { id: 'anuncios', label: 'Anúncios: ranking por leads, classificação, {fechamentos} e vendas', group: 'Gráficos e tabelas' },
+  { id: 'aguardando', label: 'Leads aguardando resposta da {empresa}', group: 'Listas de leads' },
 ] as const
 
 export type OverviewId = (typeof OVERVIEW)[number]['id']

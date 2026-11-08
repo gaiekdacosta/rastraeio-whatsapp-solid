@@ -1,3 +1,5 @@
+import type { Segmento } from '../lib/segment'
+
 export type Papel = 'admin' | 'usuario'
 
 export const PAPEL_LABEL: Record<Papel, string> = {
@@ -16,6 +18,8 @@ export interface AppUser {
   numeros: string[]
   /** Empresa do usuário, mostrada no topo do painel. Vazio = só a marca Solid. */
   empresa: string
+  /** Tipo de negócio da empresa (clínica, loja…): muda os termos e as heurísticas do painel. */
+  segmento: Segmento
   /** Blocos da aba Insights escolhidos pelo administrador (ids de lib/insights). null = todos. */
   insights: string[] | null
   /** Blocos da aba Visão geral escolhidos pelo administrador (ids de lib/overview). null = todos. */
@@ -29,12 +33,13 @@ export interface NovoUsuario {
   papel: Papel
   numeros: string[]
   empresa: string
+  segmento: Segmento
   insights: string[] | null
   visaoGeral: string[] | null
 }
 
 /** O que o administrador edita direto no perfil (sem a chave de serviço). */
-export type PerfilPatch = Partial<Pick<AppUser, 'nome' | 'papel' | 'empresa' | 'insights' | 'visaoGeral'>>
+export type PerfilPatch = Partial<Pick<AppUser, 'nome' | 'papel' | 'empresa' | 'segmento' | 'insights' | 'visaoGeral'>>
 
 /** Planilha online: o dashboard lê o CSV deste link em intervalos, direto do navegador de cada pessoa. */
 export interface FonteOnline {

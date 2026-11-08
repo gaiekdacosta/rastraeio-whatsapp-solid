@@ -52,19 +52,23 @@ const normHeader = (h: string) =>
 
 /**
  * Colunas opcionais da planilha, reconhecidas pelo nome (sem diferenciar maiúsculas nem acentos):
- * Temperatura (frio, morno, quente) e Anúncio (de qual anúncio o lead veio; aceita também "Campanha" ou "Ad").
+ * Classificação (a que as automações preenchem: frio, morno, quente ou qualquer outro valor; planilhas antigas
+ * com a coluna Temperatura continuam valendo) e Anúncio (de qual anúncio o lead veio; aceita também "Campanha" ou "Ad").
  */
 export function detectExtraColumns(fields: string[]): ExtraColumns {
   const known = new Set(EXPECTED_COLUMNS.map(normHeader))
   const candidates = fields.filter((f) => !known.has(normHeader(f)))
   const find = (pred: (n: string) => boolean) => candidates.find((f) => pred(normHeader(f)))
-  const temperature =
-    find((n) => n === 'temperatura' || n === 'temp' || n === 'temperature' || n === 'temperatura do lead') ?? find((n) => n.includes('temperatura'))
+  const classification =
+    find((n) => n === 'classificacao' || n === 'classificacao do lead' || n === 'classificacao lead') ??
+    find((n) => n.startsWith('classificacao')) ??
+    find((n) => n === 'temperatura' || n === 'temp' || n === 'temperature' || n === 'temperatura do lead') ??
+    find((n) => n.includes('temperatura'))
   const ad =
     find((n) => n === 'anuncio' || n === 'anuncios' || n === 'ad' || n === 'ads' || n === 'anuncio de origem') ??
     find((n) => n.includes('anuncio') || n.startsWith('campanha') || n.includes('ad name') || n === 'adset' || n === 'criativo')
   const out: ExtraColumns = {}
-  if (temperature) out.temperature = temperature
+  if (classification) out.classification = classification
   if (ad) out.ad = ad
   return out
 }
@@ -112,7 +116,7 @@ export function parseCsv(text: string): ParseResult {
       text,
       isMedia: /^\[m[ií]dia\]$/i.test(text),
       statusManual: (row['status_manual'] ?? '').trim(),
-      temperature: columns.temperature ? (row[columns.temperature] ?? '').trim() : '',
+      classification: columns.classification ? (row[columns.classification] ?? '').trim() : '',
       ad: columns.ad ? (row[columns.ad] ?? '').trim() : '',
     })
   })

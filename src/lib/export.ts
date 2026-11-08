@@ -1,12 +1,11 @@
 import Papa from 'papaparse'
 import type { Conversation, ExtraColumns, Message } from './types'
 import type { MetaMap } from './storage'
-import { STATUS_LABEL, STAGE_LABEL } from './status'
-import { temperatureLabel } from './temperature'
+import type { Vocab } from './segment'
 import { fmtDateTime, fmtPhone } from './format'
 import { EXPECTED_COLUMNS } from './parse'
 
-export function buildMessagesCsv(messages: Message[], convs: Conversation[], meta: MetaMap, columns: ExtraColumns = {}): string {
+export function buildMessagesCsv(messages: Message[], convs: Conversation[], meta: MetaMap, v: Vocab, columns: ExtraColumns = {}): string {
   const byKey = new Map(convs.map((c) => [c.key, c]))
   const rows = messages.map((m) => {
     const conv = byKey.get(m.convKey)
@@ -20,18 +19,18 @@ export function buildMessagesCsv(messages: Message[], convs: Conversation[], met
       'É resposta': m.direction === 'Enviada' ? 'Sim' : 'Não',
       'Respondendo para': m.replyTo,
       Mensagem: m.text,
-      status_manual: status ? STATUS_LABEL[status] : m.statusManual,
+      status_manual: status ? v.status[status] : m.statusManual,
     }
-    // As colunas Temperatura e Anúncio voltam com o nome que tinham na planilha.
-    if (columns.temperature) row[columns.temperature] = m.temperature
+    // As colunas Classificação e Anúncio voltam com o nome e o valor que tinham na planilha.
+    if (columns.classification) row[columns.classification] = m.classification
     if (columns.ad) row[columns.ad] = m.ad
     return row
   })
-  const cols = [...EXPECTED_COLUMNS, ...[columns.temperature, columns.ad].filter((c): c is string => !!c)]
+  const cols = [...EXPECTED_COLUMNS, ...[columns.classification, columns.ad].filter((c): c is string => !!c)]
   return Papa.unparse(rows, { columns: cols, newline: '\n' })
 }
 
-export function buildLeadsCsv(convs: Conversation[], meta: MetaMap, lineLabel: (line: string) => string = (l) => l): string {
+export function buildLeadsCsv(convs: Conversation[], meta: MetaMap, v: Vocab, lineLabel: (line: string) => string = (l) => l): string {
   const rows = convs.map((c) => {
     const m = meta[c.key] ?? {}
     return {
@@ -46,18 +45,18 @@ export function buildLeadsCsv(convs: Conversation[], meta: MetaMap, lineLabel: (
       'Última mensagem': fmtDateTime(c.lastAt),
       'Mensagens recebidas': c.received,
       'Mensagens enviadas': c.sent,
-      Procedimento: c.procedure,
+      [v.Item]: c.procedure,
       Canal: c.channel,
-      Temperatura: c.temperature ? temperatureLabel(c.temperature) : '',
+      Classificação: c.classification ?? '',
       Anúncio: c.ad,
       'Origem do anúncio': c.adSource === 'planilha' ? 'Planilha' : c.adSource === 'mensagem' ? 'Mensagem inicial' : '',
-      'Estágio inferido': STAGE_LABEL[c.stage],
+      'Estágio inferido': v.stage[c.stage],
       'Primeira resposta (min)': c.firstResponseMin == null ? '' : Math.round(c.firstResponseMin),
       'Mediana resposta (min)': c.medianResponseMin == null ? '' : Math.round(c.medianResponseMin),
       'Perguntou valor': c.askedPrice ? 'Sim' : 'Não',
-      'Pediu agendamento': c.askedSchedule ? 'Sim' : 'Não',
-      'Aguardando resposta da clínica': c.awaitingReply ? 'Sim' : 'Não',
-      'Status manual': m.status ? STATUS_LABEL[m.status] : '',
+      [v.intencao]: c.askedIntent ? 'Sim' : 'Não',
+      [`Aguardando resposta da ${v.empresa}`]: c.awaitingReply ? 'Sim' : 'Não',
+      'Status manual': m.status ? v.status[m.status] : '',
       'Follow-up em': m.followUp ?? '',
       Notas: m.notes ?? '',
     }

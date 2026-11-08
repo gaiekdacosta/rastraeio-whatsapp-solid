@@ -1,11 +1,12 @@
-import { CalendarRange, Filter, Megaphone, Phone, RefreshCw, RotateCcw, Thermometer, X } from 'lucide-react'
+import { CalendarRange, Filter, Megaphone, Phone, RefreshCw, RotateCcw, Tags, X } from 'lucide-react'
 import type { Filters, RangePreset } from '../lib/types'
 import type { Client } from '../lib/clients'
 import { AD_NONE, AD_NONE_LABEL, LINE_NONE } from '../lib/analytics'
 import { fmtDateKey, fmtDateTime, fmtTime } from '../lib/format'
-import { STATUS_LABEL, STATUS_ORDER } from '../lib/status'
-import { TEMPERATURE_LABEL, TEMPERATURE_NONE, TEMPERATURE_NONE_LABEL, TEMPERATURE_ORDER } from '../lib/temperature'
+import { STATUS_ORDER } from '../lib/status'
+import { CLASS_NONE, CLASS_NONE_LABEL } from '../lib/classification'
 import { useLineNames } from '../lineNames'
+import { useVocab } from '../vocab'
 import { ClientFilter } from './ClientFilter'
 import { LineFilter } from './LineFilter'
 
@@ -22,8 +23,8 @@ interface Props {
   onChange: (f: Filters) => void
   procedures: string[]
   channels: string[]
-  /** A base tem leads com temperatura (coluna Temperatura da planilha). */
-  hasTemperature: boolean
+  /** Classificações da base (coluna Classificação da planilha), na ordem dos gráficos; vazio = sem a coluna. */
+  classes: string[]
   /** Anúncios identificados na base, em ordem alfabética. */
   ads: string[]
   /** A base tem leads sem anúncio identificado. */
@@ -60,7 +61,7 @@ export const DEFAULT_FILTERS: Filters = {
   channel: 'all',
   line: 'all',
   cliente: 'all',
-  temperature: 'all',
+  classification: 'all',
   ad: 'all',
 }
 
@@ -69,7 +70,7 @@ export function FilterBar({
   onChange,
   procedures,
   channels,
-  hasTemperature,
+  classes,
   ads,
   hasNoAd,
   lines,
@@ -85,6 +86,7 @@ export function FilterBar({
   onRefresh,
 }: Props) {
   const { label } = useLineNames()
+  const v = useVocab()
   const hasClients = !!clients?.some((c) => !c.pseudo)
   // Com clientes, o filtro por número só aparece dentro de um cliente: sem cliente escolhido ele repetiria todos os números.
   const showLines = lines.length > 1 && (!hasClients || filters.cliente !== 'all')
@@ -96,7 +98,7 @@ export function FilterBar({
     filters.channel !== 'all' ||
     filters.line !== 'all' ||
     filters.cliente !== 'all' ||
-    filters.temperature !== 'all' ||
+    filters.classification !== 'all' ||
     filters.ad !== 'all'
   return (
     <div className="filterbar" role="region" aria-label="Filtros">
@@ -153,8 +155,8 @@ export function FilterBar({
       )}
       <label className="control">
         <Filter size={14} aria-hidden />
-        <select aria-label="Procedimento" value={filters.procedure} onChange={(e) => onChange({ ...filters, procedure: e.target.value })}>
-          <option value="all">Todos os procedimentos</option>
+        <select aria-label={v.Item} value={filters.procedure} onChange={(e) => onChange({ ...filters, procedure: e.target.value })}>
+          <option value="all">Todos os {v.itens}</option>
           {procedures.map((p) => (
             <option key={p} value={p}>
               {p}
@@ -168,7 +170,7 @@ export function FilterBar({
           <option value="sem_status">Sem status</option>
           {STATUS_ORDER.map((s) => (
             <option key={s} value={s}>
-              {STATUS_LABEL[s]}
+              {v.status[s]}
             </option>
           ))}
         </select>
@@ -183,17 +185,17 @@ export function FilterBar({
           ))}
         </select>
       </label>
-      {hasTemperature && (
-        <label className="control" title="Temperatura do lead, conforme a coluna Temperatura da planilha">
-          <Thermometer size={14} aria-hidden />
-          <select aria-label="Temperatura do lead" value={filters.temperature} onChange={(e) => onChange({ ...filters, temperature: e.target.value })}>
-            <option value="all">Todas as temperaturas</option>
-            {TEMPERATURE_ORDER.map((t) => (
-              <option key={t} value={t}>
-                {TEMPERATURE_LABEL[t]}
+      {classes.length > 0 && (
+        <label className="control" title="Classificação do lead, conforme a coluna Classificação da planilha">
+          <Tags size={14} aria-hidden />
+          <select aria-label="Classificação do lead" value={filters.classification} onChange={(e) => onChange({ ...filters, classification: e.target.value })}>
+            <option value="all">Todas as classificações</option>
+            {classes.map((c) => (
+              <option key={c} value={c}>
+                {c}
               </option>
             ))}
-            <option value={TEMPERATURE_NONE}>{TEMPERATURE_NONE_LABEL}</option>
+            <option value={CLASS_NONE}>{CLASS_NONE_LABEL}</option>
           </select>
         </label>
       )}
