@@ -1,4 +1,7 @@
 node_modules
+# Planilhas exportadas com conversas reais (nomes e telefones de leads): nunca vão para o git.
+# O modo demonstração lê o primeiro .csv daqui só no `npm run dev`.
+data/*.csv
 dist
 *.local
 .env
