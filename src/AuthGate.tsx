@@ -8,7 +8,12 @@ export function AuthGate() {
   const { state, signOut, refresh } = useAuth()
   switch (state.status) {
     case 'loading':
-      return <div className="loading-screen">Verificando acesso…</div>
+      return (
+        <div className="loading-screen">
+          <span className="spinner" aria-hidden />
+          Verificando acesso…
+        </div>
+      )
     case 'signedOut':
       return <LoginView />
     case 'error':

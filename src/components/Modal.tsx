@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
 import type { ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import { X } from 'lucide-react'
 
 interface Props {
@@ -19,7 +20,8 @@ export function Modal({ title, onClose, children, wide }: Props) {
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose])
 
-  return (
+  // No body, fora de quem abriu: dentro da barra do topo (backdrop-filter) o fundo fixo ficaria preso à barra.
+  return createPortal(
     <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div className={`modal card${wide ? ' wide' : ''}`} role="dialog" aria-modal="true" aria-label={title}>
         <div className="card-head">
@@ -30,6 +32,7 @@ export function Modal({ title, onClose, children, wide }: Props) {
         </div>
         {children}
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }

@@ -1,17 +1,45 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
-import { KeyRound, LogOut } from 'lucide-react'
+import { ChevronDown, KeyRound, LogOut } from 'lucide-react'
 import { useSession } from '../auth/AuthProvider'
 import { MIN_SENHA, PAPEL_LABEL } from '../auth/types'
 import { Modal } from './Modal'
 import { PasswordField } from './PasswordField'
 
+/** Avatar com o nome no topo; clicar abre o menu com trocar senha e sair (um só botão, cabe no celular). */
 export function UserMenu() {
   const { user, signOut } = useSession()
+  const [open, setOpen] = useState(false)
   const [changing, setChanging] = useState(false)
+  const root = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e: MouseEvent) => {
+      if (!root.current?.contains(e.target as Node)) setOpen(false)
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [open])
+
   return (
-    <div className="user-menu">
-      <div className="user-chip" title={user.email}>
+    <div className="user-menu" ref={root}>
+      <button
+        type="button"
+        className="user-chip"
+        title={user.email}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label={`Conta: ${user.nome || user.email}`}
+        onClick={() => setOpen((o) => !o)}
+      >
         <span className="avatar" aria-hidden>
           {initials(user.nome || user.email)}
         </span>
@@ -19,13 +47,31 @@ export function UserMenu() {
           <b>{user.nome || user.email}</b>
           <span>{PAPEL_LABEL[user.papel]}</span>
         </span>
-      </div>
-      <button type="button" className="icon-btn" onClick={() => setChanging(true)} title="Trocar minha senha" aria-label="Trocar minha senha">
-        <KeyRound size={16} />
+        <ChevronDown size={14} className="user-chip-caret" aria-hidden />
       </button>
-      <button type="button" className="icon-btn" onClick={() => void signOut()} title="Sair" aria-label="Sair">
-        <LogOut size={16} />
-      </button>
+      {open && (
+        <div className="menu" role="menu" aria-label="Minha conta">
+          <div className="menu-head">
+            <b>{user.nome || user.email}</b>
+            <span>{user.email}</span>
+            <span>{PAPEL_LABEL[user.papel]}</span>
+          </div>
+          <button
+            type="button"
+            role="menuitem"
+            className="menu-item"
+            onClick={() => {
+              setOpen(false)
+              setChanging(true)
+            }}
+          >
+            <KeyRound size={15} aria-hidden /> Trocar minha senha
+          </button>
+          <button type="button" role="menuitem" className="menu-item" onClick={() => void signOut()}>
+            <LogOut size={15} aria-hidden /> Sair
+          </button>
+        </div>
+      )}
       {changing && <ChangePasswordModal onClose={() => setChanging(false)} />}
     </div>
   )

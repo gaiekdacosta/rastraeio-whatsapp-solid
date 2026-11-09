@@ -13,7 +13,11 @@ export function StatTile({ label, value, hint, tone, icon, hero }: Props) {
   return (
     <div className={`card stat${hero ? ' hero' : ''}`}>
       <div className="label">
-        {icon}
+        {icon && (
+          <span className="stat-icon" aria-hidden>
+            {icon}
+          </span>
+        )}
         <span>{label}</span>
       </div>
       <div className="value">{value}</div>

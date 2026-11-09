@@ -522,7 +522,10 @@ export default function App() {
               onUsersChanged={setUsers}
             />
           ) : loading ? (
-            <div className="loading-screen">{source ? 'Lendo a planilha online…' : 'Carregando base de mensagens…'}</div>
+            <div className="loading-screen">
+              <span className="spinner" aria-hidden />
+              {source ? 'Lendo a planilha online…' : 'Carregando base de mensagens…'}
+            </div>
           ) : !dataset ? (
             isAdmin ? (
               dataView

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { FormEvent, ReactNode } from 'react'
 import { LogIn } from 'lucide-react'
 import { useAuth } from '../auth/AuthProvider'
@@ -12,12 +12,35 @@ export function LoginView() {
   const { backend, signIn } = useAuth()
   const [email, setEmail] = useState('')
   const [senha, setSenha] = useState('')
-  const [busy, setBusy] = useState(false)
+  const [busy, setBusy] = useState<false | 'senha' | 'google'>(false)
   const [error, setError] = useState<string | null>(null)
+  const [google, setGoogle] = useState(false)
+
+  useEffect(() => {
+    let alive = true
+    void backend.googleEnabled().then((on) => alive && setGoogle(on))
+    // Volta do Google com erro (ex.: e-mail sem conta). Num efeito, não no useState: o StrictMode chama duas vezes.
+    const redirectError = backend.takeLoginRedirectError()
+    if (redirectError) setError(redirectError)
+    return () => {
+      alive = false
+    }
+  }, [backend])
+
+  const entrarComGoogle = async () => {
+    setBusy('google')
+    setError(null)
+    try {
+      await backend.signInWithGoogle()
+    } catch (err) {
+      setError((err as Error).message)
+      setBusy(false)
+    }
+  }
 
   const submit = async (e: FormEvent) => {
     e.preventDefault()
-    setBusy(true)
+    setBusy('senha')
     setError(null)
     try {
       await signIn(email, senha)
@@ -29,6 +52,10 @@ export function LoginView() {
 
   return (
     <AuthLayout>
+      <div className="auth-intro">
+        <h2>Bem-vindo de volta</h2>
+        <p>Entre para acompanhar os leads e o atendimento no WhatsApp.</p>
+      </div>
       <form className="stack" onSubmit={submit} aria-label="Entrar">
         <div className="field">
           <label htmlFor="login-email">E-mail</label>
@@ -40,10 +67,24 @@ export function LoginView() {
             {error}
           </div>
         )}
-        <button type="submit" className="btn primary block" disabled={busy}>
-          <LogIn size={15} aria-hidden /> {busy ? 'Entrando…' : 'Entrar'}
+        <button type="submit" className="btn primary block" disabled={!!busy}>
+          <LogIn size={15} aria-hidden /> {busy === 'senha' ? 'Entrando…' : 'Entrar'}
         </button>
-        <p className="small muted center">Esqueceu a senha? Peça ao administrador para redefinir.</p>
+        {google && (
+          <>
+            <div className="auth-divider" aria-hidden>
+              ou
+            </div>
+            <button type="button" className="btn block" onClick={() => void entrarComGoogle()} disabled={!!busy}>
+              <GoogleLogo /> {busy === 'google' ? 'Abrindo o Google…' : 'Entrar com Google'}
+            </button>
+          </>
+        )}
+        <p className="small muted center">
+          {google
+            ? 'Esqueceu a senha? Entre com o Google usando o e-mail da sua conta, ou peça ao administrador para redefinir.'
+            : 'Esqueceu a senha? Peça ao administrador para redefinir.'}
+        </p>
       </form>
 
       {backend.kind === 'demo' && (
@@ -69,6 +110,18 @@ export function LoginView() {
         </div>
       )}
     </AuthLayout>
+  )
+}
+
+/** O "G" do Google, nas cores oficiais, como pedem as regras de marca do botão "Entrar com Google". */
+function GoogleLogo() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 48 48" aria-hidden>
+      <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z" />
+      <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z" />
+      <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z" />
+      <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z" />
+    </svg>
   )
 }
 
