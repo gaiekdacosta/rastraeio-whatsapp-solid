@@ -77,6 +77,12 @@ export interface Backend {
   /** Login/logout (inclusive em outra aba) ou sessão expirada. */
   onAuthChange(cb: () => void): () => void
   signIn(email: string, senha: string): Promise<void>
+  /** Login com Google ligado no servidor (no Supabase: Authentication → Sign In / Providers → Google)? */
+  googleEnabled(): Promise<boolean>
+  /** Sai do site para o Google; a volta chega logada ou com um erro (ver takeLoginRedirectError). */
+  signInWithGoogle(): Promise<void>
+  /** Erro com que o Supabase devolveu o login com Google (ex.: e-mail sem conta). Lido da URL uma vez só. */
+  takeLoginRedirectError(): string | null
   signOut(): Promise<void>
   changeOwnPassword(senha: string): Promise<void>
 

@@ -34,6 +34,8 @@ num site público, porque as senhas de demonstração estão na própria tela.
 | **Administrador** | Todas as conversas e todos os blocos do painel. No topo, o filtro **Clientes** troca o painel inteiro para um cliente. Aba **Usuários**: cria contas (e-mail + senha), define o perfil, a empresa e o painel de cada usuário (quais indicadores, gráficos e listas ele vê), redefine senha, exclui e marca os números que cada usuário vê. Aba **Dados**: liga a planilha online ou publica um arquivo. |
 | **Usuário** | Só as conversas dos números marcados para ele, em todas as abas, totais e exportações. Vê o nome da **empresa** dele no topo e, nas abas Visão geral e Insights, só os blocos que o administrador escolheu. Pode trocar a própria senha. |
 
+Com o [login com Google](#login-com-google-opcional) ligado, qualquer conta pode entrar também pelo Google, com o mesmo e-mail.
+
 Os números da aba Usuários são os **números da empresa encontrados no CSV** (coluna `Telefone` das mensagens *Enviadas*),
 com os atendentes e o total de conversas de cada um. Há também a coluna **Sem número**: leads que nunca receberam
 resposta, que a planilha não liga a nenhum número. Só os vê quem tem essa coluna marcada.
@@ -184,6 +186,26 @@ são apagadas.
    Nunca coloque a *secret* / *service_role* key no `.env` do site: tudo que começa com `VITE_` vai para o navegador.
 7. Rode `npm run build`, publique o `dist/`, entre como administrador, publique o CSV em **Dados** e libere os números
    em **Usuários**.
+
+### Login com Google (opcional)
+
+O botão **Entrar com Google** só aparece na tela de login quando o provedor Google está ligado no Supabase: não precisa
+mudar o site nem publicar de novo. Com o cadastro aberto desligado (passo 4), **só entra quem já tem conta**: o Supabase liga
+o Google à conta de mesmo e-mail criada na aba Usuários. Um e-mail do Google sem conta vê “Este e-mail do Google não tem
+conta no painel”. A senha da conta continua valendo.
+
+1. No [Google Cloud Console](https://console.cloud.google.com/apis/credentials), crie (ou escolha) um projeto e configure a
+   **tela de consentimento OAuth** (*Google Auth Platform → Branding*): nome do app, e-mail de suporte e, em *Audience*,
+   **External** (ou **Internal**, se todos usam o Google Workspace da mesma empresa). Publique o app (*Publish app*) para
+   não ficar restrito aos usuários de teste.
+2. Em *Clients → Create client*: tipo **Web application**.
+   - **Authorized JavaScript origins**: a URL do site (ex.: `https://rastraeio-whatsapp-solid.vercel.app`) e
+     `http://localhost:5173` para desenvolvimento.
+   - **Authorized redirect URIs**: `https://<ref>.supabase.co/auth/v1/callback`.
+3. No Supabase, *Authentication → Sign In / Providers → Google*: ligue, cole o **Client ID** e o **Client Secret** e salve.
+4. Em *Authentication → URL Configuration*: **Site URL** = a URL do site; em **Redirect URLs**, adicione
+   `https://<seu-site>/**` e `http://localhost:5173/**`. Sem isso, o Supabase devolve o login para a Site URL padrão
+   (`http://localhost:3000`) e o login não termina.
 
 **Atualizando um projeto que já estava no ar**: rode também as migrations `20261010120000_empresa_e_insights.sql`,
 `20261010160000_visao_geral_por_usuario.sql` (empresa e painel por usuário), `20261022120000_fonte_planilha.sql` (planilha

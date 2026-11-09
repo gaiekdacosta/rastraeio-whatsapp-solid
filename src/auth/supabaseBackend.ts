@@ -44,6 +44,36 @@ function loginError(e: { code?: string; message: string; name?: string }): Error
   return new Error(e.message)
 }
 
+/** Erro com que o Supabase devolve o login com Google (error_code / error_description na URL). */
+function googleError(code: string, description: string): string {
+  if (code === 'signup_disabled' || /signups? not allowed/i.test(description))
+    return 'Este e-mail do Google não tem conta no painel. Peça ao administrador para criar sua conta com o mesmo e-mail e entre de novo.'
+  if (/provider is not enabled|unsupported provider/i.test(description))
+    return 'O login com Google está desligado no Supabase (Authentication → Sign In / Providers → Google).'
+  if (/^(bad_oauth_state|bad_oauth_callback|flow_state_expired|flow_state_not_found)$/.test(code))
+    return 'O login com Google expirou ou foi aberto em outra aba. Tente de novo.'
+  return description ? `Não foi possível entrar com o Google: ${description}` : 'Não foi possível entrar com o Google. Tente de novo.'
+}
+
+const REDIRECT_ERROR_KEYS = ['error', 'error_code', 'error_description', 'sb']
+
+/**
+ * Lê (e tira da URL) o erro da volta do Google. O Supabase manda na query (PKCE) ou no #fragmento. Roda antes de criar o
+ * cliente, que senão também leria o erro e apagaria a sessão à toa.
+ */
+function readRedirectError(): string | null {
+  if (typeof window === 'undefined') return null
+  const url = new URL(window.location.href)
+  const hash = new URLSearchParams(url.hash.replace(/^#/, ''))
+  const from = url.searchParams.has('error') || url.searchParams.has('error_description') ? url.searchParams : hash.has('error') || hash.has('error_description') ? hash : null
+  if (!from) return null
+  const message = googleError(from.get('error_code') ?? '', from.get('error_description') ?? '')
+  for (const k of REDIRECT_ERROR_KEYS) from.delete(k)
+  if (from === hash) url.hash = hash.toString()
+  window.history.replaceState(window.history.state, '', url.toString())
+  return message
+}
+
 function dbError(e: { message: string }): Error {
   if (/fetch/i.test(e.message)) return new Error(OFFLINE)
   if (/row-level security|permission denied/i.test(e.message)) return new Error('Sem permissão para esta ação.')
@@ -62,8 +92,10 @@ function dbError(e: { message: string }): Error {
 const notFound = (e: { message: string }) => /not.?found/i.test(e.message)
 
 export function createSupabaseBackend(url: string, key: string): Backend {
+  let redirectError = readRedirectError()
   const sb = createClient(url, key, {
-    auth: { storageKey: 'rastreio-whatsapp.auth', persistSession: true, autoRefreshToken: true },
+    // PKCE: a volta do Google traz só um código de uso único na URL, não o token da sessão.
+    auth: { storageKey: 'rastreio-whatsapp.auth', persistSession: true, autoRefreshToken: true, flowType: 'pkce' },
   })
 
   async function uid(): Promise<string> {
@@ -135,6 +167,33 @@ export function createSupabaseBackend(url: string, key: string): Backend {
     async signIn(email, senha) {
       const { error } = await sb.auth.signInWithPassword({ email: email.trim(), password: senha })
       if (error) throw loginError(error)
+    },
+
+    async googleEnabled() {
+      // Mesmo endpoint público que o Supabase usa para listar os provedores ligados; na falha, esconde o botão.
+      try {
+        const res = await fetch(`${url.replace(/\/+$/, '')}/auth/v1/settings`, { headers: { apikey: key } })
+        if (!res.ok) return false
+        const settings = (await res.json()) as { external?: Record<string, boolean> }
+        return settings.external?.google === true
+      } catch {
+        return false
+      }
+    },
+
+    async signInWithGoogle() {
+      // Só entra quem já tem conta (o cadastro aberto fica desligado): o Supabase liga o Google à conta de mesmo e-mail.
+      const { error } = await sb.auth.signInWithOAuth({
+        provider: 'google',
+        options: { redirectTo: window.location.origin + window.location.pathname, queryParams: { prompt: 'select_account' } },
+      })
+      if (error) throw loginError(error)
+    },
+
+    takeLoginRedirectError() {
+      const e = redirectError
+      redirectError = null
+      return e
     },
 
     async signOut() {

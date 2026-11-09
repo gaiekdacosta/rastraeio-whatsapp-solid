@@ -149,6 +149,18 @@ export function createDemoBackend(): Backend {
       notify()
     },
 
+    async googleEnabled() {
+      return false
+    },
+
+    async signInWithGoogle() {
+      throw new Error('O login com Google só existe com o Supabase configurado.')
+    },
+
+    takeLoginRedirectError() {
+      return null
+    },
+
     async signOut() {
       write(SESSION_KEY, null)
       notify()
