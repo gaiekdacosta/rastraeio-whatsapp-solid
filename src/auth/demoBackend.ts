@@ -1,4 +1,5 @@
 import type { AppUser, Backend, BasePublicada, FonteOnline, Papel } from './types'
+import { empresaKey, isTodos } from '../lib/sources'
 import { asSegmento } from '../lib/segment'
 
 /*
@@ -11,7 +12,8 @@ import { asSegmento } from '../lib/segment'
 
 const USERS_KEY = 'rastreio-whatsapp.demo.users'
 const SESSION_KEY = 'rastreio-whatsapp.demo.session'
-const FONTE_KEY = 'rastreio-whatsapp.demo.fonte'
+const FONTE_KEY = 'rastreio-whatsapp.demo.fonte' // versão antiga: um link só para todos
+const FONTES_KEY = 'rastreio-whatsapp.demo.fontes'
 
 interface DemoUser extends AppUser {
   senha: string
@@ -91,14 +93,32 @@ const strip = ({ senha: _senha, ...u }: DemoUser): AppUser => ({
 })
 
 interface FonteSalva {
+  id?: string
+  empresa?: string
   url: string
   intervaloSeg: number
   definidaEm: string
 }
 
-function readFonte(): FonteOnline | null {
-  const f = read<FonteSalva | null>(FONTE_KEY, null)
-  return f && typeof f.url === 'string' && f.url ? { url: f.url, intervaloSeg: Number(f.intervaloSeg) || 120, definidaEm: new Date(f.definidaEm) } : null
+const fromSalva = (f: FonteSalva, i: number): FonteOnline => ({
+  id: f.id ?? `demo-fonte-${i}`,
+  empresa: f.empresa ?? '',
+  url: f.url,
+  intervaloSeg: Number(f.intervaloSeg) || 120,
+  definidaEm: new Date(f.definidaEm),
+})
+
+/** Planilhas salvas neste navegador; o link único da versão antiga vira a planilha de todos os clientes. */
+function readFontes(): FonteOnline[] {
+  const list = read<FonteSalva[] | null>(FONTES_KEY, null)
+  if (Array.isArray(list)) return list.filter((f) => typeof f?.url === 'string' && f.url).map(fromSalva)
+  const old = read<FonteSalva | null>(FONTE_KEY, null)
+  return old && typeof old.url === 'string' && old.url ? [fromSalva(old, 0)] : []
+}
+
+function writeFontes(fontes: FonteOnline[]) {
+  write(FONTES_KEY, fontes.map((f) => ({ ...f, definidaEm: (f.definidaEm ?? new Date()).toISOString() })))
+  write(FONTE_KEY, null)
 }
 
 export function createDemoBackend(): Backend {
@@ -228,10 +248,12 @@ export function createDemoBackend(): Backend {
       save()
     },
 
-    async loadBase() {
-      // Planilha online definida pelo admin: vale para todos, antes de qualquer arquivo publicado.
-      const fonte = readFonte()
-      if (fonte) return { text: '', fileName: '', clinicPhones: [], refTime: null, publishedAt: null, fonte }
+    async loadBase(user) {
+      // Planilhas online: valem antes de qualquer arquivo publicado. Como o RLS do Supabase, o usuário comum só
+      // recebe as do cliente dele e as de todos os clientes.
+      const key = empresaKey(user.empresa)
+      const fontes = readFontes().filter((f) => user.papel === 'admin' || isTodos(f) || (key && empresaKey(f.empresa) === key))
+      if (fontes.length) return { text: '', fileName: '', clinicPhones: [], refTime: null, publishedAt: null, fontes }
       if (published) return published
       published = (await baseDb<BasePublicada>('readonly', (st) => st.get(BASE_KEY))) ?? null
       if (published) return published
@@ -246,18 +268,34 @@ export function createDemoBackend(): Backend {
         clinicPhones: [],
         refTime: null,
         publishedAt: null,
-        fonte: null,
+        fontes: [],
       }
     },
 
-    async setSource(fonte) {
+    async saveSource(fonte) {
       requireAdmin()
-      write(FONTE_KEY, fonte ? { url: fonte.url, intervaloSeg: fonte.intervaloSeg, definidaEm: new Date().toISOString() } : null)
+      const fontes = readFontes()
+      const saved: FonteOnline = {
+        id: fonte.id ?? `demo-fonte-${Date.now().toString(36)}`,
+        empresa: fonte.empresa.trim(),
+        url: fonte.url.trim(),
+        intervaloSeg: fonte.intervaloSeg,
+        definidaEm: new Date(),
+      }
+      if (fontes.some((f) => f.id !== saved.id && f.url === saved.url && empresaKey(f.empresa) === empresaKey(saved.empresa)))
+        throw new Error('Esta planilha já está ligada a este cliente.')
+      writeFontes(fonte.id ? fontes.map((f) => (f.id === fonte.id ? saved : f)) : [...fontes, saved])
+      return saved
+    },
+
+    async removeSource(id) {
+      requireAdmin()
+      writeFontes(readFontes().filter((f) => f.id !== id))
     },
 
     async publishBase(p) {
       requireAdmin()
-      published = { text: p.text, fileName: p.fileName, clinicPhones: p.clinicPhones, refTime: p.refTime, publishedAt: new Date(), fonte: null }
+      published = { text: p.text, fileName: p.fileName, clinicPhones: p.clinicPhones, refTime: p.refTime, publishedAt: new Date(), fontes: [] }
       // Se o navegador não guardar, a publicação ainda vale até recarregar a página.
       await baseDb('readwrite', (st) => st.put(published, BASE_KEY))
     },

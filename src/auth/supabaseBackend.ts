@@ -1,5 +1,5 @@
 import { createClient, FunctionsHttpError } from '@supabase/supabase-js'
-import type { AppUser, Backend, BasePublicada, FonteOnline, NovoUsuario, Papel, PerfilPatch, Publicacao } from './types'
+import type { AppUser, Backend, BasePublicada, FonteInput, FonteOnline, NovoUsuario, Papel, PerfilPatch, Publicacao } from './types'
 import { joinCsv } from '../lib/access'
 import { DEFAULT_SEGMENTO, asSegmento } from '../lib/segment'
 
@@ -17,6 +17,27 @@ interface PerfilRow {
   insights: string[] | null
   visao_geral: string[] | null
 }
+
+interface PlanilhaRow {
+  id: string
+  empresa: string
+  url: string
+  intervalo_seg: number
+  definida_em: string | null
+}
+
+const PLANILHA_COLS = 'id, empresa, url, intervalo_seg, definida_em'
+
+const fromPlanilha = (r: PlanilhaRow): FonteOnline => ({
+  id: r.id,
+  empresa: r.empresa,
+  url: r.url,
+  intervaloSeg: r.intervalo_seg,
+  definidaEm: r.definida_em ? new Date(r.definida_em) : null,
+})
+
+/** Banco sem a migration das planilhas por cliente. */
+const semPlanilhas = (e: { message: string } | null) => !!e && /planilhas_online/.test(e.message) && /does not exist|schema cache/i.test(e.message)
 
 const PERFIL_COLS_SEM_SEGMENTO = 'id, email, nome, papel, empresa, insights, visao_geral'
 const PERFIL_COLS = `${PERFIL_COLS_SEM_SEGMENTO}, segmento`
@@ -84,8 +105,9 @@ function dbError(e: { message: string }): Error {
     return new Error('O banco ainda não tem o campo da Visão geral por usuário. Rode a migration 20261010160000_visao_geral_por_usuario.sql no Supabase.')
   if (semSegmento(e))
     return new Error('O banco ainda não tem o campo do tipo de negócio. Rode a migration 20261108173011_segmento.sql no Supabase.')
-  if (/relation .*fonte_planilha.* does not exist|fonte_planilha.*schema cache/i.test(e.message))
-    return new Error('O banco ainda não tem a tabela da planilha online. Rode a migration 20261022120000_fonte_planilha.sql no Supabase.')
+  if (semPlanilhas(e))
+    return new Error('O banco ainda não tem a tabela das planilhas por cliente. Rode a migration 20261109145557_planilhas_por_cliente.sql no Supabase.')
+  if (/planilhas_online_empresa_url|duplicate key/i.test(e.message)) return new Error('Esta planilha já está ligada a este cliente.')
   return new Error(e.message)
 }
 
@@ -244,20 +266,18 @@ export function createSupabaseBackend(url: string, key: string): Backend {
     },
 
     async loadBase(user): Promise<BasePublicada | null> {
-      const [baseRes, fonteRes] = await Promise.all([
+      const [baseRes, fontesRes] = await Promise.all([
         sb.from('base_conversas').select('versao, nome_arquivo, numeros, ultima_mensagem, publicada_em').maybeSingle(),
-        sb.from('fonte_planilha').select('url, intervalo_seg, definida_em').maybeSingle(),
+        // O RLS só devolve as planilhas do cliente de quem está logado e as de todos os clientes (admin: todas).
+        sb.from('planilhas_online').select(PLANILHA_COLS).order('definida_em').returns<PlanilhaRow[]>(),
       ])
       if (baseRes.error) throw dbError(baseRes.error)
-      // Banco sem a migration da planilha online: segue só com o arquivo publicado.
-      const semTabela = !!fonteRes.error && /does not exist|schema cache/i.test(fonteRes.error.message)
-      if (fonteRes.error && !semTabela) throw dbError(fonteRes.error)
-      const fonte: FonteOnline | null = fonteRes.data
-        ? { url: fonteRes.data.url, intervaloSeg: fonteRes.data.intervalo_seg, definidaEm: fonteRes.data.definida_em ? new Date(fonteRes.data.definida_em) : null }
-        : null
+      // Banco sem a migration das planilhas por cliente: segue só com o arquivo publicado.
+      if (fontesRes.error && !semPlanilhas(fontesRes.error)) throw dbError(fontesRes.error)
+      const fontes = (fontesRes.data ?? []).map(fromPlanilha)
       const base = baseRes.data
-      // Com planilha online, ninguém baixa os arquivos do Storage: cada navegador lê o CSV do link.
-      if (fonte) return { text: '', fileName: '', clinicPhones: [], refTime: null, publishedAt: null, fonte }
+      // Com planilha online, ninguém baixa os arquivos do Storage: cada navegador lê o CSV dos links.
+      if (fontes.length) return { text: '', fileName: '', clinicPhones: [], refTime: null, publishedAt: null, fontes }
       if (!base) return null
       // Admin baixa a planilha inteira; usuário, um arquivo por número liberado (o Storage recusa os demais).
       const paths = user.papel === 'admin' ? [`${base.versao}/completa.csv`] : user.numeros.map((n) => `${base.versao}/numeros/${n}.csv`)
@@ -277,25 +297,29 @@ export function createSupabaseBackend(url: string, key: string): Backend {
         clinicPhones: base.numeros ?? [],
         refTime: base.ultima_mensagem ? new Date(base.ultima_mensagem) : null,
         publishedAt: base.publicada_em ? new Date(base.publicada_em) : null,
-        fonte: null,
+        fontes: [],
       }
     },
 
-    async setSource(fonte) {
-      if (!fonte) {
-        const { error } = await sb.from('fonte_planilha').delete().eq('id', true)
-        if (error) throw dbError(error)
-        return
-      }
-      const userId = await uid()
-      const { error } = await sb.from('fonte_planilha').upsert({
-        id: true,
-        url: fonte.url,
+    async saveSource(fonte: FonteInput) {
+      const row = {
+        empresa: fonte.empresa.trim(),
+        url: fonte.url.trim(),
         intervalo_seg: fonte.intervaloSeg,
         definida_em: new Date().toISOString(),
-        definida_por: userId,
-      })
+        definida_por: await uid(),
+      }
+      const query = fonte.id ? sb.from('planilhas_online').update(row).eq('id', fonte.id) : sb.from('planilhas_online').insert(row)
+      const { data, error } = await query.select(PLANILHA_COLS).returns<PlanilhaRow[]>()
       if (error) throw dbError(error)
+      if (!data?.length) throw new Error('Sem permissão para alterar as planilhas.')
+      return fromPlanilha(data[0])
+    },
+
+    async removeSource(id) {
+      const { data, error } = await sb.from('planilhas_online').delete().eq('id', id).select('id')
+      if (error) throw dbError(error)
+      if (!data.length) throw new Error('Planilha não encontrada (ou sem permissão para removê-la).')
     },
 
     async publishBase(p: Publicacao) {

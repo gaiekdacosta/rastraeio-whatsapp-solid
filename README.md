@@ -31,7 +31,7 @@ num site público, porque as senhas de demonstração estão na própria tela.
 
 | Perfil | O que vê e faz |
 |---|---|
-| **Administrador** | Todas as conversas e todos os blocos do painel. No topo, o filtro **Clientes** troca o painel inteiro para um cliente. Aba **Usuários**: cria contas (e-mail + senha), define o perfil, a empresa e o painel de cada usuário (quais indicadores, gráficos e listas ele vê), redefine senha, exclui e marca os números que cada usuário vê. Aba **Dados**: liga a planilha online ou publica um arquivo. |
+| **Administrador** | Todas as conversas e todos os blocos do painel. No topo, o filtro **Clientes** troca o painel inteiro para um cliente. Aba **Usuários**: cria contas (e-mail + senha), define o perfil, a empresa e o painel de cada usuário (quais indicadores, gráficos e listas ele vê), redefine senha, exclui e marca os números que cada usuário vê. Aba **Dados**: liga a planilha online de cada cliente ou publica um arquivo. |
 | **Usuário** | Só as conversas dos números marcados para ele, em todas as abas, totais e exportações. Vê o nome da **empresa** dele no topo e, nas abas Visão geral e Insights, só os blocos que o administrador escolheu. Pode trocar a própria senha. |
 
 Com o [login com Google](#login-com-google-opcional) ligado, qualquer conta pode entrar também pelo Google, com o mesmo e-mail.
@@ -64,27 +64,46 @@ Mudanças de números valem no próximo acesso da pessoa (ou quando ela recarreg
   criados no futuro. Sem nenhum bloco de Insights marcado, a aba Insights some do painel; sem nenhum da Visão geral, a aba
   mostra um aviso. É uma escolha de apresentação: quem limita os dados continua sendo a liberação de números.
 
-## Planilha online (tempo real)
+## Planilhas online por cliente (tempo real)
 
-Em **Dados → Planilha online**, o administrador cola o link da planilha do Google Sheets (a aba com as conversas) e
-escolhe o intervalo (1 a 15 minutos). A partir daí o dashboard de **cada pessoa** lê o CSV da planilha sozinho, no
-intervalo escolhido e sempre que a aba do navegador volta a ficar visível; só reprocessa quando o conteúdo mudou. Na barra de
-filtros aparece “Atualizado às HH:MM” com um botão para atualizar na hora. A planilha pode ter vários números de atendimento:
-a divisão por número e por cliente continua automática, como no arquivo.
+Em **Dados → Planilhas online**, o administrador liga a planilha do Google Sheets (a aba com as conversas) **de cada
+cliente** e escolhe o intervalo de leitura (1 a 15 minutos). A partir daí o painel de cada pessoa lê o CSV sozinho, no
+intervalo de cada planilha e sempre que a aba do navegador volta a ficar visível; só reprocessa o que mudou. Na barra de
+filtros aparece “Atualizado às HH:MM” com um botão para atualizar na hora. Cada planilha da lista mostra a última leitura,
+quantas mensagens tem e o erro, se a leitura falhar (a última leitura boa continua valendo).
+
+**Cliente** é a **Empresa** das contas da aba Usuários (sem diferenciar maiúsculas). Para um cliente novo: em Dados, escolha
+*Novo cliente…*, dê o nome e cole o link; depois, em Usuários, crie as contas com a mesma Empresa (o campo sugere os nomes
+conhecidos) e marque os números de cada conta. O cliente aparece no filtro **Clientes** do topo assim que a planilha é lida,
+mesmo antes de ter conta (a planilha fica marcada “nenhuma conta com esta empresa” até lá).
+
+| Planilha | Quem recebe o link | Recorte |
+|---|---|---|
+| **De um cliente** | Só as contas com aquela Empresa (e os administradores) | Cada conta vê os números liberados para ela |
+| **De todos os clientes** (uma planilha com vários) | Todas as contas sem planilha própria | Por número, no navegador (o modelo antigo) |
+
+- Cliente com planilha própria usa só ela. Um cliente pode ter mais de uma planilha (elas se somam).
+- O administrador vê todas juntas. Se um cliente tem planilha própria e também aparece numa planilha de todos, as conversas
+  dele saem da de todos (pelo número que atendeu e, nos leads sem resposta, pela mesma conversa), para não contar duas vezes.
+- Leads que nunca receberam resposta numa planilha de cliente são daquele cliente (no filtro Clientes e para as contas dele,
+  com “Sem número” liberado); os de uma planilha de todos continuam sem dono, como antes.
+- Com alguma planilha online, ela vale no lugar do arquivo publicado; removendo todas, o painel volta ao último arquivo.
 
 Para o navegador conseguir ler a planilha, ela precisa estar **compartilhada com “Qualquer pessoa com o link” (Leitor)** ou
 **publicada na web em CSV** (Arquivo → Compartilhar → Publicar na web → a aba → CSV). Vale colar o endereço do navegador com a
 aba aberta (`…/edit#gid=…`), o link publicado (`…/pub?output=csv`) ou qualquer URL que devolva um CSV. O Google Sheets
 responde com os cabeçalhos CORS necessários nos dois casos; planilhas publicadas na web levam até 5 minutos para refletir
-mudanças. “Testar e ligar” lê a planilha, confere as colunas e mostra quantas mensagens, números e colunas extras encontrou.
+mudanças. “Testar e adicionar” lê a planilha, confere as colunas e mostra quantas mensagens, números e colunas extras encontrou.
 
-No Supabase, o link fica na tabela `fonte_planilha` (linha única; migration `20261022120000_fonte_planilha.sql`) e tem
-prioridade sobre o arquivo publicado enquanto existir; **Desligar** apaga a linha e o painel volta ao último arquivo. No modo
-demonstração ele fica no `localStorage` do navegador.
+No Supabase, as planilhas ficam na tabela `planilhas_online` (migration `20261109145557_planilhas_por_cliente.sql`, que
+também trouxe o link único da versão anterior como planilha de todos os clientes). O RLS só entrega a cada conta as planilhas
+do cliente dela e as de todos os clientes; incluir, alterar e remover é só do administrador, e a conta comum não muda a
+própria Empresa. No modo demonstração, as planilhas ficam no `localStorage` do navegador.
 
-**Atenção à privacidade**: quem tiver o link consegue abrir a planilha inteira, e com a planilha online o recorte por número
-liberado acontece no navegador de cada usuário, não no servidor. Use-a quando todos os usuários do painel podem ver a planilha
-toda (ex.: a equipe da agência). Para entregar a cada cliente só as conversas dele com garantia no servidor, publique um arquivo.
+**Atenção à privacidade**: quem tiver o link de uma planilha consegue abri-la inteira. Com uma planilha por cliente, cada
+cliente só recebe o link da dele. Numa planilha de todos os clientes, todas as contas sem planilha própria recebem o link,
+e o recorte por número acontece no navegador; para garantir a separação no servidor, use planilhas por cliente (ou publique
+um arquivo).
 
 ## Classificação e anúncio
 
@@ -209,9 +228,10 @@ conta no painel”. A senha da conta continua valendo.
 
 **Atualizando um projeto que já estava no ar**: rode também as migrations `20261010120000_empresa_e_insights.sql`,
 `20261010160000_visao_geral_por_usuario.sql` (empresa e painel por usuário), `20261022120000_fonte_planilha.sql` (planilha
-online) e `20261108173011_segmento.sql` (tipo de negócio; `npx supabase db push` aplica só as que faltam) e publique a função de
+online), `20261108173011_segmento.sql` (tipo de negócio) e `20261109145557_planilhas_por_cliente.sql` (planilhas por cliente;
+`npx supabase db push` aplica só as que faltam) e publique a função de
 novo (`npx supabase functions deploy admin-usuarios`), antes de subir o site novo. Sem as duas primeiras, o login mostra um aviso
-dizendo qual falta; sem a terceira, o painel funciona só com arquivo e avisa ao tentar ligar a planilha online; sem a do tipo de
+dizendo qual falta; sem a das planilhas por cliente, o painel funciona só com arquivo e avisa ao tentar adicionar uma planilha; sem a do tipo de
 negócio, o painel continua funcionando com todo mundo como clínica e avisa ao tentar trocar o tipo na aba Usuários.
 
 ### Supabase local (opcional)
@@ -228,7 +248,7 @@ e promova com o SQL do passo 5.
 | **Visão geral** | Blocos escolhidos pelo administrador para cada usuário (admin vê todos): KPIs do período (conversas, novos leads, mensagens, mediana da 1ª resposta, leads aguardando resposta, sem status, leads quentes ou classificados), atendimento por número, **anúncios** (ranking por leads, classificação, agendamentos ou pedidos e vendas), mensagens por dia, novos leads por semana, classificação dos leads, procedimentos (ou produtos) de interesse, estágio inferido, status manual e lista de leads aguardando resposta. |
 | **Conversas** | Lista pesquisável (nome, telefone, texto, anúncio, classificação) com ordenação e filtros rápidos; detalhe em formato de chat com classificação e anúncio; **status manual, data de follow-up e notas** por conversa; link “Abrir no WhatsApp”. |
 | **Insights** | Blocos escolhidos pelo administrador para cada usuário (admin vê todos): destaques automáticos (inclusive classificação e anúncios), funil inferido, distribuição do tempo de 1ª resposta, mapa de calor dia × hora, perfil horário, pedidos mais comuns (valor, agendamento ou compra, endereço), taxa de agendamento (ou de pedido) por procedimento (ou produto) e por anúncio, canal de origem, leads aguardando resposta e leads esfriando. |
-| **Dados** | Planilha online (admin), informações da base e colunas encontradas, publicação de arquivo (admin) ou números liberados (usuário), exportação (relatório em PDF, CSV original com `status_manual` preenchido e resumo por lead), limpeza dos status salvos no navegador e explicação dos cálculos. |
+| **Dados** | Planilhas online por cliente (admin), informações da base e colunas encontradas, publicação de arquivo (admin) ou números liberados (usuário), exportação (relatório em PDF, CSV original com `status_manual` preenchido e resumo por lead), limpeza dos status salvos no navegador e explicação dos cálculos. |
 | **Usuários** (admin) | Matriz usuários × números da planilha, perfil, tipo de negócio e painel de cada um, novo usuário com senha gerada, edição de nome/empresa/senha e exclusão. |
 
 Os filtros de período, procedimento (ou produto), status, canal, classificação, anúncio e número da empresa ficam numa única barra e
@@ -287,7 +307,7 @@ Paleta e regras de visualização seguem a skill `dataviz` (cores validadas para
 ```
 src/
   auth/       types.ts (contrato do backend), supabaseBackend.ts, demoBackend.ts (só dev), backend.ts (escolhe), AuthProvider.tsx
-  lib/        parse.ts (CSV, colunas Classificação/Anúncio), sheet.ts (planilha online: link → CSV), classification.ts, segment.ts (tipo de negócio: termos e regras), access.ts (divisão por número), clients.ts (clientes = contas por empresa), analytics.ts (conversas, funil, métricas, ranking de anúncios), blocks.ts + overview.ts + insights.ts + panel.ts (blocos do painel por usuário), export.ts, storage.ts, status.ts
+  lib/        parse.ts (CSV, colunas Classificação/Anúncio), sheet.ts (planilha online: link → CSV), sources.ts (planilhas por cliente: quem lê qual, juntar sem duplicar), classification.ts, segment.ts (tipo de negócio: termos e regras), access.ts (divisão por número), clients.ts (clientes = contas e planilhas por empresa), analytics.ts (conversas, funil, métricas, ranking de anúncios), blocks.ts + overview.ts + insights.ts + panel.ts (blocos do painel por usuário), export.ts, storage.ts, status.ts
   components/ FilterBar (filtros + botão de atualizar da planilha online), ChoiceFilter (cartões/linha compacta), ClientFilter (clientes), LineFilter (filtro/renomear números), UserMenu, BlockPicker + PanelPicker (seleção dos blocos), PasswordField, Modal, ThemeToggle, StatTile, ChartCard, StatusBadge (+ ClassificationBadge), charts/ (inclui StackedHBars)
   views/      LoginView, OverviewView, ConversationsView, InsightsView, DataView, UsersView, ReportView (relatório em PDF)
   AuthGate.tsx   login / erro de acesso / dashboard
@@ -295,7 +315,7 @@ src/
   lineNames.tsx  nomes dados aos números da empresa
   vocab.tsx      termos do tipo de negócio que está na tela (clínica, loja, outro)
 supabase/
-  migrations/    tabelas, RLS, bucket e travas; empresa, insights e visão geral por usuário; fonte_planilha (planilha online); segmento (tipo de negócio)
+  migrations/    tabelas, RLS, bucket e travas; empresa, insights e visão geral por usuário; planilhas_online (planilha por cliente); segmento (tipo de negócio)
   functions/admin-usuarios/   criar conta, redefinir senha, excluir conta (só admin)
   config.toml    Supabase local (portas 553xx, cadastro aberto desligado)
 data/            CSV exportado para testar no modo demonstração (só no seu computador: fora do git)

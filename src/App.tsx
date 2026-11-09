@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Database, FileDown, LayoutDashboard, Lightbulb, Lock, MessagesSquare, UsersRound } from 'lucide-react'
-import type { ConvMeta, Dataset, Filters, Status } from './lib/types'
+import type { ClientSheets, Conversation, ConvMeta, Dataset, Filters, Status } from './lib/types'
 import { parseCsv } from './lib/parse'
 import type { ParseResult } from './lib/parse'
 import {
@@ -15,7 +15,7 @@ import {
   referenceTime,
 } from './lib/analytics'
 import { accessKey, SEM_NUMERO, splitCsvByAccess } from './lib/access'
-import { buildClients, clientNameByKey, segmentByKey } from './lib/clients'
+import { buildClients, clientMatcher, clientNameByKey, hasLooseUnknown, segmentByKey } from './lib/clients'
 import type { Client } from './lib/clients'
 import { loadMeta, saveMeta } from './lib/storage'
 import type { MetaMap } from './lib/storage'
@@ -24,6 +24,7 @@ import { CLASS_NONE, CLASS_NONE_LABEL, sortClasses } from './lib/classification'
 import { DEFAULT_SEGMENTO, commonSegmento, vocabFor } from './lib/segment'
 import type { Segmento } from './lib/segment'
 import { fetchSheetCsv } from './lib/sheet'
+import { empresaKey, mergeSheets, sortSources, sourceLabel, sourcesFor } from './lib/sources'
 import { visibleInsights } from './lib/insights'
 import { visibleOverview } from './lib/overview'
 import { fmtInt } from './lib/format'
@@ -31,7 +32,7 @@ import { useTheme } from './theme'
 import { useLineNames } from './lineNames'
 import { VocabProvider } from './vocab'
 import { useSession } from './auth/AuthProvider'
-import type { AppUser, FonteOnline } from './auth/types'
+import type { AppUser, FonteInput, FonteOnline } from './auth/types'
 import { ThemeToggle } from './components/ThemeToggle'
 import { UserMenu } from './components/UserMenu'
 import { BrandLogo } from './components/BrandLogo'
@@ -41,7 +42,7 @@ import { OverviewView } from './views/OverviewView'
 import { ConversationsView } from './views/ConversationsView'
 import { InsightsView } from './views/InsightsView'
 import { DataView } from './views/DataView'
-import type { PublishState } from './views/DataView'
+import type { PublishState, SheetStatus } from './views/DataView'
 import { UsersView } from './views/UsersView'
 import { ReportView } from './views/ReportView'
 
@@ -68,6 +69,14 @@ interface ShowExtra {
   fetchedAt?: Date | null
   /** Releitura da mesma planilha: mantém filtros e conversa aberta. */
   keep?: boolean
+  clientSheets?: ClientSheets
+}
+
+/** Última leitura válida de cada planilha online (para só reprocessar o que mudou). */
+interface SheetCache {
+  url: string
+  text: string
+  res: ParseResult
 }
 
 export default function App() {
@@ -87,12 +96,15 @@ export default function App() {
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
   const [users, setUsers] = useState<AppUser[]>([]) // contas (só admin): base do filtro Clientes
   const [report, setReport] = useState(false)
-  // Planilha online: link lido em intervalos (null = base vem do arquivo publicado).
-  const [source, setSource] = useState<FonteOnline | null>(null)
-  const [live, setLive] = useState<LiveInfo | null>(null)
-  const [baseVersion, setBaseVersion] = useState(0) // força recarregar a base publicada (ex.: ao desligar a planilha online)
-  const lastText = useRef('') // último CSV lido da planilha online, para não reprocessar o que não mudou
-  const lastFetch = useRef(0)
+  // Planilhas online que esta pessoa lê, cada uma em seu intervalo (vazio = base vem do arquivo publicado).
+  // Admin: todas; usuário: as do cliente dele ou, sem nenhuma, as de todos os clientes (lib/sources.ts).
+  const [sources, setSources] = useState<FonteOnline[]>([])
+  const [sheetStatus, setSheetStatus] = useState<Map<string, SheetStatus>>(() => new Map())
+  const [baseVersion, setBaseVersion] = useState(0) // força recarregar a base publicada (ex.: ao remover a última planilha online)
+  const sheetCache = useRef(new Map<string, SheetCache>())
+  const sheetFetchedAt = useRef(new Map<string, number>())
+  const sheetInflight = useRef(new Set<string>())
+  const sheetCtrl = useRef<AbortController | null>(null)
   const hasDataset = useRef(false)
   // Usuário comum: empresa no topo e só os blocos da Visão geral e dos Insights que o administrador escolheu para ele.
   const empresa = isAdmin ? '' : user.empresa.trim()
@@ -124,6 +136,7 @@ export default function App() {
       origem: extra.origem,
       fetchedAt: extra.fetchedAt ?? null,
       columns: res.columns,
+      clientSheets: extra.clientSheets,
     })
     hasDataset.current = true
     setSkipped(res.skipped)
@@ -149,13 +162,13 @@ export default function App() {
       .loadBase(user)
       .then((base) => {
         if (!alive) return
-        if (base?.fonte) {
-          delegated = true // a leitura da planilha online (efeito abaixo) assume daqui
-          setSource(base.fonte)
+        const mine = base ? sourcesFor(base.fontes, user) : []
+        if (mine.length) {
+          delegated = true // a leitura das planilhas online (efeito abaixo) assume daqui
+          setSources(sortSources(mine))
           return
         }
-        setSource(null)
-        setLive(null)
+        setSources([])
         if (!base) return setEmpty('sem-base')
         if (!base.text.trim()) return setEmpty('vazio')
         const res = parseChecked(base.text, base.fileName)
@@ -172,47 +185,110 @@ export default function App() {
     }
   }, [backend, user, isAdmin, parseChecked, showDataset, baseVersion])
 
-  // Lê a planilha online; só reprocessa quando o CSV mudou.
-  const refreshLive = useCallback(
-    async (fonte: FonteOnline, signal: AbortSignal, first: boolean) => {
-      setLive((l) => ({ status: 'loading', at: l?.at ?? null, message: null, intervaloSeg: fonte.intervaloSeg }))
+  /*
+   * Lê as planilhas online. Cada uma tem o próprio intervalo; só baixa as que venceram (ou todas, ao clicar em
+   * Atualizar) e só refaz a base quando algum CSV mudou. Planilha com erro mantém a última leitura boa.
+   *   rebuild: a lista de planilhas mudou (refaz a base mesmo sem CSV novo);
+   *   tick: leitura periódica; force: botão Atualizar agora.
+   */
+  const refreshSheets = useCallback(
+    async (list: FonteOnline[], signal: AbortSignal, mode: 'rebuild' | 'tick' | 'force') => {
+      const inflight = sheetInflight.current
+      const now = Date.now()
+      const due = list.filter((f) => {
+        if (inflight.has(f.id)) return false
+        const cached = sheetCache.current.get(f.id)
+        if (mode === 'force' || !cached || cached.url !== f.url) return true
+        return now - (sheetFetchedAt.current.get(f.id) ?? 0) >= f.intervaloSeg * 1000 * 0.9
+      })
+      if (!due.length && mode !== 'rebuild') return
+      for (const f of due) inflight.add(f.id)
+      setSheetStatus((prev) => {
+        const next = new Map(prev)
+        for (const f of due) next.set(f.id, { status: 'loading', at: prev.get(f.id)?.at ?? null, message: null, messages: prev.get(f.id)?.messages ?? null })
+        return next
+      })
       try {
-        const { text } = await fetchSheetCsv(fonte.url, signal)
+        const results = await Promise.all(
+          due.map(async (f) => {
+            try {
+              return { f, text: (await fetchSheetCsv(f.url, signal)).text, error: null }
+            } catch (e) {
+              return { f, text: '', error: (e as Error).message }
+            }
+          }),
+        )
         if (signal.aborted) return
-        lastFetch.current = Date.now()
-        if (text !== lastText.current) {
-          const res = parseChecked(text, ONLINE_NAME)
-          if (!res) {
-            setLive({ status: 'error', at: new Date(), message: 'A planilha não tem as colunas esperadas.', intervaloSeg: fonte.intervaloSeg })
-            return
+        const at = new Date()
+        let changed = mode === 'rebuild'
+        const updates = new Map<string, SheetStatus>()
+        for (const { f, text, error: fetchError } of results) {
+          sheetFetchedAt.current.set(f.id, Date.now())
+          const prev = sheetCache.current.get(f.id)
+          const fail = (message: string) => updates.set(f.id, { status: 'error', at, message, messages: prev?.res.messages.length ?? null })
+          if (fetchError) {
+            fail(fetchError)
+            continue
           }
-          lastText.current = text
-          showDataset(res, ONLINE_NAME, { origem: 'online', fetchedAt: new Date(), keep: !first })
+          if (!prev || prev.text !== text || prev.url !== f.url) {
+            const res = parseCsv(text)
+            if (res.missingColumns.length) {
+              fail(`A planilha não tem as colunas esperadas: ${res.missingColumns.join(', ')}.`)
+              continue
+            }
+            if (!res.messages.length) {
+              fail('A planilha não tem mensagens válidas.')
+              continue
+            }
+            sheetCache.current.set(f.id, { url: f.url, text, res })
+            changed = true
+          }
+          updates.set(f.id, { status: 'ok', at, message: null, messages: sheetCache.current.get(f.id)?.res.messages.length ?? null })
         }
-        setLive({ status: 'ok', at: new Date(), message: null, intervaloSeg: fonte.intervaloSeg })
-      } catch (e) {
-        if (signal.aborted) return
-        const message = (e as Error).message
-        setLive({ status: 'error', at: new Date(), message, intervaloSeg: fonte.intervaloSeg })
-        if (!hasDataset.current) setError(`Não foi possível ler a planilha online: ${message}`)
+        setSheetStatus((prev) => {
+          const next = new Map([...prev].filter(([id]) => list.some((f) => f.id === id)))
+          updates.forEach((v, id) => next.set(id, v))
+          return next
+        })
+        if (!changed) return
+        const parts = list.flatMap((f) => {
+          const cached = sheetCache.current.get(f.id)
+          return cached ? [{ fonte: f, res: cached.res }] : []
+        })
+        if (!parts.length) {
+          const first = [...updates.values()].find((u) => u.message)?.message ?? 'sem resposta'
+          hasDataset.current = false
+          setDataset(null)
+          setError(`Não foi possível ler ${list.length > 1 ? 'as planilhas online' : 'a planilha online'}: ${first}`)
+          return
+        }
+        const merged = mergeSheets(parts)
+        showDataset(merged.res, ONLINE_NAME, { origem: 'online', fetchedAt: at, keep: hasDataset.current, clientSheets: merged.clientSheets })
+      } finally {
+        for (const f of due) inflight.delete(f.id)
       }
     },
-    [parseChecked, showDataset],
+    [showDataset],
   )
 
   useEffect(() => {
-    if (!source) return
+    if (!sources.length) return
     const ctrl = new AbortController()
-    lastText.current = ''
+    sheetCtrl.current = ctrl
+    sheetInflight.current = new Set() // leituras da lista anterior foram canceladas
+    const ids = new Set(sources.map((f) => f.id))
+    for (const id of [...sheetCache.current.keys()]) {
+      if (ids.has(id)) continue
+      sheetCache.current.delete(id)
+      sheetFetchedAt.current.delete(id)
+    }
     if (!hasDataset.current) setLoading(true)
-    void refreshLive(source, ctrl.signal, true).finally(() => {
+    void refreshSheets(sources, ctrl.signal, 'rebuild').finally(() => {
       if (!ctrl.signal.aborted) setLoading(false)
     })
-    const period = source.intervaloSeg * 1000
+    const period = Math.min(...sources.map((f) => f.intervaloSeg)) * 1000
     const tick = () => {
-      if (document.visibilityState !== 'visible') return
-      if (Date.now() - lastFetch.current < period * 0.9) return
-      void refreshLive(source, ctrl.signal, false)
+      if (document.visibilityState === 'visible') void refreshSheets(sources, ctrl.signal, 'tick')
     }
     const id = setInterval(tick, Math.min(period, 30000))
     document.addEventListener('visibilitychange', tick)
@@ -221,31 +297,52 @@ export default function App() {
       clearInterval(id)
       document.removeEventListener('visibilitychange', tick)
     }
-  }, [source, refreshLive])
+  }, [sources, refreshSheets])
 
   const refreshNow = useCallback(() => {
-    if (!source) return
-    lastFetch.current = 0
-    void refreshLive(source, new AbortController().signal, false)
-  }, [source, refreshLive])
+    const ctrl = sheetCtrl.current
+    if (sources.length && ctrl && !ctrl.signal.aborted) void refreshSheets(sources, ctrl.signal, 'force')
+  }, [sources, refreshSheets])
+
+  // Estado das planilhas juntas, para o botão de atualizar do topo.
+  const live = useMemo<LiveInfo | null>(() => {
+    if (!sources.length) return null
+    const st = sources.map((f) => sheetStatus.get(f.id))
+    const status = st.some((x) => x?.status === 'loading') ? 'loading' : st.some((x) => x?.status === 'error') ? 'error' : st.every((x) => x?.status === 'ok') ? 'ok' : 'idle'
+    const times = st.map((x) => x?.at?.getTime() ?? 0).filter(Boolean)
+    const errors = sources.flatMap((f, i) => (st[i]?.status === 'error' ? [`${sources.length > 1 ? `${sourceLabel(f)}: ` : ''}${st[i]?.message}`] : []))
+    return {
+      status,
+      at: times.length ? new Date(Math.max(...times)) : null,
+      message: errors.join(' · ') || null,
+      intervaloSeg: Math.min(...sources.map((f) => f.intervaloSeg)),
+    }
+  }, [sources, sheetStatus])
 
   const saveSource = useCallback(
-    async (fonte: { url: string; intervaloSeg: number }) => {
-      await backend.setSource(fonte)
-      setSource({ ...fonte, definidaEm: new Date() })
+    async (fonte: FonteInput) => {
+      const saved = await backend.saveSource(fonte)
+      setSources((prev) => sortSources(prev.some((f) => f.id === saved.id) ? prev.map((f) => (f.id === saved.id ? saved : f)) : [...prev, saved]))
     },
     [backend],
   )
 
-  const removeSource = useCallback(async () => {
-    await backend.setSource(null)
-    setSource(null)
-    setLive(null)
-    lastText.current = ''
-    hasDataset.current = false
-    setDataset(null)
-    setBaseVersion((v) => v + 1)
-  }, [backend])
+  const removeSource = useCallback(
+    async (id: string) => {
+      await backend.removeSource(id)
+      const next = sources.filter((f) => f.id !== id)
+      setSources(next)
+      if (next.length) return
+      // Sem planilha online: volta para o arquivo publicado (ou fica sem base).
+      sheetCache.current.clear()
+      sheetFetchedAt.current.clear()
+      setSheetStatus(new Map())
+      hasDataset.current = false
+      setDataset(null)
+      setBaseVersion((v) => v + 1)
+    },
+    [backend, sources],
+  )
 
   useEffect(() => {
     saveMeta(meta)
@@ -278,20 +375,23 @@ export default function App() {
   const refTime = useMemo(() => dataset?.refTime ?? new Date(), [dataset])
   // Tipo de negócio de cada número (decide o que as heurísticas procuram: procedimento × produto, agendamento × pedido).
   // Usuário: o dele. Admin: o do cliente dono do número; número sem cliente fica como clínica.
+  const clientSheets = dataset?.clientSheets
   const segmentOf = useMemo<(key: string) => Segmento>(() => {
     if (!isAdmin) return () => user.segmento
-    const byKey = segmentByKey(buildClients(users, []))
+    const byKey = segmentByKey(buildClients(users, [], clientSheets?.clients))
     return (key) => byKey.get(key) ?? DEFAULT_SEGMENTO
-  }, [isAdmin, user.segmento, users])
+  }, [isAdmin, user.segmento, users, clientSheets])
   const baseConvs = useMemo(
     () => (dataset ? buildConversations(dataset.messages, refTime, dataset.clinicPhones, segmentOf) : []),
     [dataset, refTime, segmentOf],
   )
-  const baseUnknown = useMemo(() => baseConvs.some((c) => !c.line && !c.isGroup), [baseConvs])
-  // Clientes (só admin): as contas da aba Usuários agrupadas por empresa, mais "Sem cliente" para o que nenhuma conta tem.
+  // Leads sem resposta que só "Sem número" liberado alcança (os de planilha de cliente já são do cliente).
+  const baseUnknown = useMemo(() => hasLooseUnknown(baseConvs, clientSheets), [baseConvs, clientSheets])
+  // Clientes (só admin): as contas da aba Usuários agrupadas por empresa e os clientes com planilha online própria,
+  // mais "Sem cliente" para o que ninguém tem.
   const clients = useMemo<Client[]>(
-    () => (isAdmin && dataset ? buildClients(users, [...dataset.clinicPhones, ...(baseUnknown ? [SEM_NUMERO] : [])]) : []),
-    [isAdmin, dataset, users, baseUnknown],
+    () => (isAdmin && dataset ? buildClients(users, [...dataset.clinicPhones, ...(baseUnknown ? [SEM_NUMERO] : [])], clientSheets?.clients) : []),
+    [isAdmin, dataset, users, baseUnknown, clientSheets],
   )
   const selectedClient = useMemo(
     () => (isAdmin && filters.cliente !== 'all' ? (clients.find((c) => c.id === filters.cliente) ?? null) : null),
@@ -311,13 +411,18 @@ export default function App() {
     () => (isAdmin ? (selectedClient ? new Set(selectedClient.numeros) : null) : new Set(user.numeros)),
     [isAdmin, selectedClient, user.numeros],
   )
-  const allConvs = useMemo(() => (allowed ? baseConvs.filter((c) => allowed.has(accessKey(c))) : baseConvs), [baseConvs, allowed])
+  // Cliente escolhido: os números dele e, nos leads sem resposta, a planilha de onde vieram (lib/clients.ts).
+  const belongs = useMemo<((c: Conversation) => boolean) | null>(() => {
+    if (!isAdmin) return allowed ? (c) => allowed.has(accessKey(c)) : null
+    return selectedClient ? clientMatcher(selectedClient, clientSheets) : null
+  }, [isAdmin, allowed, selectedClient, clientSheets])
+  const allConvs = useMemo(() => (belongs ? baseConvs.filter(belongs) : baseConvs), [baseConvs, belongs])
   const messages = useMemo(() => {
     if (!dataset) return []
-    if (!allowed) return dataset.messages
+    if (!belongs) return dataset.messages
     const keys = new Set(allConvs.map((c) => c.key))
     return dataset.messages.filter((m) => keys.has(m.convKey))
-  }, [dataset, allowed, allConvs])
+  }, [dataset, belongs, allConvs])
   const clinicPhones = useMemo(() => {
     const all = dataset?.clinicPhones ?? []
     return allowed ? all.filter((p) => allowed.has(p)) : all
@@ -378,12 +483,9 @@ export default function App() {
     if (!clients.length) return { counts, total: 0 }
     const { convs } = applyFilters(baseConvs, [], range, { ...filters, line: 'all' }, meta)
     const leads = leadConversations(convs, meta)
-    for (const c of clients) {
-      const keys = new Set(c.numeros)
-      counts.set(c.id, leads.filter((l) => keys.has(accessKey(l))).length)
-    }
+    for (const c of clients) counts.set(c.id, leads.filter(clientMatcher(c, clientSheets)).length)
     return { counts, total: leads.length }
-  }, [clients, baseConvs, range, filters, meta])
+  }, [clients, clientSheets, baseConvs, range, filters, meta])
   // Cliente escolhido que deixou de existir (conta excluída ou empresa renomeada): volta para todos.
   useEffect(() => {
     if (filters.cliente !== 'all' && clients.length > 0 && !selectedClient) setFilters((f) => ({ ...f, cliente: 'all' }))
@@ -454,6 +556,18 @@ export default function App() {
     return s
   }, [filters, lineLabel, vocab])
 
+  // Empresas conhecidas (contas e planilhas), para escolher o cliente de uma planilha e a empresa de uma conta.
+  const empresas = useMemo(() => {
+    const byKey = new Map<string, string>()
+    for (const u of users) if (u.papel === 'usuario' && u.empresa.trim()) byKey.set(empresaKey(u.empresa), u.empresa.trim())
+    for (const f of sources) if (f.empresa.trim() && !byKey.has(empresaKey(f.empresa))) byKey.set(empresaKey(f.empresa), f.empresa.trim())
+    return [...byKey.values()].sort((a, b) => a.localeCompare(b, 'pt-BR'))
+  }, [users, sources])
+  const empresasComConta = useMemo(
+    () => new Set(users.filter((u) => u.papel === 'usuario' && u.empresa.trim()).map((u) => empresaKey(u.empresa))),
+    [users],
+  )
+
   const dataView = (
     <DataView
       dataset={scoped}
@@ -468,7 +582,10 @@ export default function App() {
       publish={publish}
       onFile={(f) => void onFile(f)}
       onClearMeta={() => setMeta({})}
-      source={source}
+      sources={sources}
+      sheetStatus={sheetStatus}
+      empresas={empresas}
+      empresasComConta={empresasComConta}
       live={live}
       onSaveSource={saveSource}
       onRemoveSource={removeSource}
@@ -519,12 +636,13 @@ export default function App() {
               counts={accessCounts}
               attendants={attendants}
               hasBase={!!dataset}
+              empresas={empresas}
               onUsersChanged={setUsers}
             />
           ) : loading ? (
             <div className="loading-screen">
               <span className="spinner" aria-hidden />
-              {source ? 'Lendo a planilha online…' : 'Carregando base de mensagens…'}
+              {sources.length > 1 ? 'Lendo as planilhas online…' : sources.length ? 'Lendo a planilha online…' : 'Carregando base de mensagens…'}
             </div>
           ) : !dataset ? (
             isAdmin ? (
@@ -552,7 +670,7 @@ export default function App() {
                   clients={clients}
                   clientCounts={clientCounts.counts}
                   clientTotal={clientCounts.total}
-                  live={source ? live : null}
+                  live={live}
                   onRefresh={refreshNow}
                 />
               )}

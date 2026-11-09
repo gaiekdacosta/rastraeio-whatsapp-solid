@@ -120,4 +120,14 @@ export interface Dataset {
   /** Última leitura da planilha online. */
   fetchedAt: Date | null
   columns: ExtraColumns
+  /** Com planilhas de clientes (online): de qual cliente é cada número e cada conversa (lib/sources.ts). */
+  clientSheets?: ClientSheets
+}
+
+/** O que as planilhas de cada cliente dizem sobre a base juntada (ids de cliente como em lib/clients.ts). */
+export interface ClientSheets {
+  /** Id do cliente → nome (como foi digitado na planilha) e números da empresa que aparecem nas planilhas dele. */
+  clients: Map<string, { nome: string; numeros: string[] }>
+  /** Chave da conversa → clientes em cujas planilhas ela aparece (para os leads que nunca receberam resposta). */
+  convs: Map<string, Set<string>>
 }

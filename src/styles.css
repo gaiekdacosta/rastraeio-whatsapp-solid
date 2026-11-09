@@ -2350,6 +2350,125 @@ fieldset.field {
   }
 }
 
+/* ---------- Planilhas por cliente ---------- */
+.source-dot.loading {
+  background: var(--baseline);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--baseline) 35%, transparent);
+  animation: pulse 1.2s ease-in-out infinite;
+}
+.source-dot.error {
+  background: var(--status-critical);
+  box-shadow: 0 0 0 3px rgba(208, 59, 59, 0.18);
+}
+@keyframes pulse {
+  50% {
+    opacity: 0.45;
+  }
+}
+.sheet-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.sheet-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-2);
+  min-width: 0;
+}
+.sheet-item.editing {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.sheet-item .source-dot {
+  margin-top: 6px;
+}
+.sheet-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.sheet-title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+}
+.sheet-title svg {
+  color: var(--muted);
+}
+.sheet-url {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  color: var(--muted);
+  text-decoration: none;
+}
+.sheet-url span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sheet-url:hover {
+  color: var(--accent-text);
+}
+.sheet-error {
+  color: var(--critical-text);
+}
+.sheet-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  background: var(--surface-1);
+}
+.sheet-form-title {
+  font-weight: 600;
+}
+.sheet-form-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+}
+@media (min-width: 760px) {
+  .sheet-form-grid {
+    grid-template-columns: minmax(180px, 240px) minmax(0, 1fr) 150px;
+    align-items: end;
+  }
+  .sheet-form-grid:has(> :nth-child(4)) {
+    grid-template-columns: minmax(180px, 220px) minmax(160px, 220px) minmax(0, 1fr) 150px;
+  }
+}
+@media (max-width: 640px) {
+  .sheets-card .card-head {
+    flex-wrap: wrap;
+  }
+  .sheets-card .card-actions {
+    width: 100%;
+  }
+  .sheet-item {
+    flex-wrap: wrap;
+  }
+  .sheet-item .row-actions {
+    width: 100%;
+    justify-content: flex-start;
+    padding-left: 21px;
+  }
+}
+
 /* ---------- Relatório (PDF) ---------- */
 .report-overlay {
   position: fixed;

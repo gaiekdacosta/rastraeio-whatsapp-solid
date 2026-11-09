@@ -25,6 +25,8 @@ interface Props {
   counts: Map<string, number>
   attendants: Map<string, string[]>
   hasBase: boolean
+  /** Empresas já conhecidas (contas e planilhas online), sugeridas no campo Empresa. */
+  empresas?: string[]
   /** Avisa o App quando a lista de contas muda (o filtro Clientes do topo nasce dela). */
   onUsersChanged?: (users: AppUser[]) => void
 }
@@ -40,7 +42,7 @@ interface Column {
   stale: boolean
 }
 
-export function UsersView({ lines, hasUnknownLine, counts, attendants, hasBase, onUsersChanged }: Props) {
+export function UsersView({ lines, hasUnknownLine, counts, attendants, hasBase, empresas = [], onUsersChanged }: Props) {
   const { backend, user: me, refresh: refreshMe } = useSession()
   const { label, isRenamed } = useLineNames()
   const [users, setUsers] = useState<AppUser[] | null>(null)
@@ -334,6 +336,11 @@ export function UsersView({ lines, hasUnknownLine, counts, attendants, hasBase, 
         )}
       </section>
 
+      <datalist id="empresas-conhecidas">
+        {empresas.map((e) => (
+          <option key={e} value={e} />
+        ))}
+      </datalist>
       <NewUserCard columns={columns.filter((c) => !c.stale)} users={users ?? []} onCreated={() => void reload()} />
 
       {pickingPanel && <PanelModal user={pickingPanel} onClose={() => setPickingPanel(null)} onSave={(selected) => savePanel(pickingPanel, selected)} />}
@@ -466,7 +473,15 @@ function NewUserCard({ columns, users, onCreated }: { columns: Column[]; users: 
         {papel === 'usuario' && (
           <div className="field">
             <label htmlFor="nu-empresa">Empresa (aparece no topo do painel)</label>
-            <input id="nu-empresa" value={empresa} onChange={(e) => setEmpresa(e.target.value)} maxLength={80} autoComplete="off" placeholder="Ex.: Loja Centro" />
+            <input
+              id="nu-empresa"
+              value={empresa}
+              onChange={(e) => setEmpresa(e.target.value)}
+              maxLength={80}
+              autoComplete="off"
+              list="empresas-conhecidas"
+              placeholder="Ex.: Loja Centro"
+            />
           </div>
         )}
         {papel === 'usuario' && (
@@ -572,7 +587,7 @@ function EditUserModal({ user, onClose, onSaved }: { user: AppUser; onClose: () 
         {user.papel === 'usuario' && (
           <div className="field">
             <label htmlFor="eu-empresa">Empresa (aparece no topo do painel)</label>
-            <input id="eu-empresa" value={empresa} onChange={(e) => setEmpresa(e.target.value)} maxLength={80} placeholder="Ex.: Loja Centro" />
+            <input id="eu-empresa" value={empresa} onChange={(e) => setEmpresa(e.target.value)} maxLength={80} autoComplete="off" list="empresas-conhecidas" placeholder="Ex.: Loja Centro" />
           </div>
         )}
         <PasswordField id="eu-senha" label="Nova senha (deixe em branco para manter)" value={senha} onChange={setSenha} autoComplete="new-password" canGenerate />

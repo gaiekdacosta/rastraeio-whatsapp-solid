@@ -41,12 +41,21 @@ export interface NovoUsuario {
 /** O que o administrador edita direto no perfil (sem a chave de serviço). */
 export type PerfilPatch = Partial<Pick<AppUser, 'nome' | 'papel' | 'empresa' | 'segmento' | 'insights' | 'visaoGeral'>>
 
-/** Planilha online: o dashboard lê o CSV deste link em intervalos, direto do navegador de cada pessoa. */
+/**
+ * Planilha online: o dashboard lê o CSV deste link em intervalos, direto do navegador de cada pessoa.
+ * Cada planilha é de um cliente (empresa das contas) ou, com empresa vazia, de todos os clientes.
+ */
 export interface FonteOnline {
+  id: string
+  /** Empresa do cliente dono da planilha (como em AppUser.empresa); '' = planilha de todos os clientes. */
+  empresa: string
   url: string
   intervaloSeg: number
   definidaEm: Date | null
 }
+
+/** Planilha nova (sem id) ou alteração de uma existente (com id). */
+export type FonteInput = Pick<FonteOnline, 'empresa' | 'url' | 'intervaloSeg'> & { id?: string }
 
 /** Planilha publicada, já recortada para quem está logado. */
 export interface BasePublicada {
@@ -57,8 +66,11 @@ export interface BasePublicada {
   /** Última mensagem da base inteira: referência de espera igual para todos. */
   refTime: Date | null
   publishedAt: Date | null
-  /** Quando definida, vale a planilha online e `text` vem vazio: o app lê o CSV do link. */
-  fonte: FonteOnline | null
+  /**
+   * Planilhas online que quem está logado pode ler (no Supabase, o banco já esconde as de outros clientes).
+   * Com alguma, ela vale no lugar do arquivo e `text` vem vazio: o app lê o CSV dos links.
+   */
+  fontes: FonteOnline[]
 }
 
 export interface Publicacao {
@@ -96,6 +108,8 @@ export interface Backend {
   /** null = nenhuma planilha publicada nem planilha online definida ainda. */
   loadBase(user: AppUser): Promise<BasePublicada | null>
   publishBase(p: Publicacao): Promise<void>
-  /** Define (ou, com null, desliga) a planilha online que todos passam a ler. Só administradores. */
-  setSource(fonte: Pick<FonteOnline, 'url' | 'intervaloSeg'> | null): Promise<void>
+  /** Inclui ou altera uma planilha online (de um cliente ou de todos). Só administradores. */
+  saveSource(fonte: FonteInput): Promise<FonteOnline>
+  /** Remove uma planilha online. Só administradores. */
+  removeSource(id: string): Promise<void>
 }
