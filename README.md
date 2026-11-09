@@ -96,7 +96,8 @@ responde com os cabeçalhos CORS necessários nos dois casos; planilhas publicad
 mudanças. “Testar e adicionar” lê a planilha, confere as colunas e mostra quantas mensagens, números e colunas extras encontrou.
 
 No Supabase, as planilhas ficam na tabela `planilhas_online` (migration `20261109145557_planilhas_por_cliente.sql`, que
-também trouxe o link único da versão anterior como planilha de todos os clientes). O RLS só entrega a cada conta as planilhas
+também trouxe o link único da versão anterior como planilha de todos os clientes; a tabela antiga `fonte_planilha` sai em
+`20261109151531_remove_fonte_planilha.sql`). O RLS só entrega a cada conta as planilhas
 do cliente dela e as de todos os clientes; incluir, alterar e remover é só do administrador, e a conta comum não muda a
 própria Empresa. No modo demonstração, as planilhas ficam no `localStorage` do navegador.
 
@@ -228,7 +229,8 @@ conta no painel”. A senha da conta continua valendo.
 
 **Atualizando um projeto que já estava no ar**: rode também as migrations `20261010120000_empresa_e_insights.sql`,
 `20261010160000_visao_geral_por_usuario.sql` (empresa e painel por usuário), `20261022120000_fonte_planilha.sql` (planilha
-online), `20261108173011_segmento.sql` (tipo de negócio) e `20261109145557_planilhas_por_cliente.sql` (planilhas por cliente;
+online), `20261108173011_segmento.sql` (tipo de negócio), `20261109145557_planilhas_por_cliente.sql` (planilhas por cliente) e
+`20261109151531_remove_fonte_planilha.sql` (apaga a tabela do link único, já copiado; rode depois de publicar o site novo;
 `npx supabase db push` aplica só as que faltam) e publique a função de
 novo (`npx supabase functions deploy admin-usuarios`), antes de subir o site novo. Sem as duas primeiras, o login mostra um aviso
 dizendo qual falta; sem a das planilhas por cliente, o painel funciona só com arquivo e avisa ao tentar adicionar uma planilha; sem a do tipo de
