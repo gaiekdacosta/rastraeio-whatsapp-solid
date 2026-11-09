@@ -1,10 +1,10 @@
-import { useEffect, useState } from 'react'
-import type { FormEvent, ReactNode } from 'react'
-import { LogIn } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import type { CSSProperties, FormEvent, PointerEvent as ReactPointerEvent, ReactNode } from 'react'
+import { ArrowRight, CalendarCheck, Flame, MessageCircle, ShieldCheck, TrendingUp, Zap } from 'lucide-react'
 import { useAuth } from '../auth/AuthProvider'
 import { DEMO_ACCOUNTS } from '../auth/demoBackend'
 import { PAPEL_LABEL } from '../auth/types'
-import { BrandLogo } from '../components/BrandLogo'
+import { SolidMark } from '../components/BrandLogo'
 import { PasswordField } from '../components/PasswordField'
 import { ThemeToggle } from '../components/ThemeToggle'
 
@@ -56,31 +56,52 @@ export function LoginView() {
         <h2>Bem-vindo de volta</h2>
         <p>Entre para acompanhar os leads e o atendimento no WhatsApp.</p>
       </div>
-      <form className="stack" onSubmit={submit} aria-label="Entrar">
+      <form className="stack auth-form" onSubmit={submit} aria-label="Entrar">
         <div className="field">
           <label htmlFor="login-email">E-mail</label>
-          <input id="login-email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="username" autoFocus required />
+          <input
+            id="login-email"
+            type="email"
+            inputMode="email"
+            placeholder="voce@empresa.com.br"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            autoComplete="username"
+            autoCapitalize="none"
+            // No toque, o foco automático abriria o teclado por cima da tela de entrada.
+            autoFocus={window.matchMedia('(pointer: fine)').matches}
+            required
+          />
         </div>
-        <PasswordField id="login-senha" label="Senha" value={senha} onChange={setSenha} autoComplete="current-password" required />
+        <PasswordField id="login-senha" label="Senha" value={senha} onChange={setSenha} autoComplete="current-password" placeholder="Sua senha" required />
         {error && (
-          <div className="callout warn" role="alert">
+          <div className="callout warn auth-error" role="alert">
             {error}
           </div>
         )}
-        <button type="submit" className="btn primary block" disabled={!!busy}>
-          <LogIn size={15} aria-hidden /> {busy === 'senha' ? 'Entrando…' : 'Entrar'}
+        <button type="submit" className={`btn primary block auth-submit${busy === 'senha' ? ' is-busy' : ''}`} disabled={!!busy}>
+          {busy === 'senha' ? (
+            <>
+              <span className="btn-spinner" aria-hidden /> Entrando…
+            </>
+          ) : (
+            <>
+              Entrar <ArrowRight size={16} aria-hidden className="auth-submit-arrow" />
+            </>
+          )}
         </button>
         {google && (
           <>
             <div className="auth-divider" aria-hidden>
               ou
             </div>
-            <button type="button" className="btn block" onClick={() => void entrarComGoogle()} disabled={!!busy}>
-              <GoogleLogo /> {busy === 'google' ? 'Abrindo o Google…' : 'Entrar com Google'}
+            <button type="button" className="btn block auth-google" onClick={() => void entrarComGoogle()} disabled={!!busy}>
+              {busy === 'google' ? <span className="btn-spinner" aria-hidden /> : <GoogleLogo />}
+              {busy === 'google' ? 'Abrindo o Google…' : 'Entrar com Google'}
             </button>
           </>
         )}
-        <p className="small muted center">
+        <p className="small muted center auth-help">
           {google
             ? 'Esqueceu a senha? Entre com o Google usando o e-mail da sua conta, ou peça ao administrador para redefinir.'
             : 'Esqueceu a senha? Peça ao administrador para redefinir.'}
@@ -125,15 +146,128 @@ function GoogleLogo() {
   )
 }
 
-export function AuthLayout({ children }: { children: ReactNode }) {
+/* ---------- Fundo vivo e "feed" de exemplo ---------- */
+
+interface FeedItem {
+  id: number
+  icon: typeof MessageCircle
+  tone: 'blue' | 'green' | 'hot' | 'violet'
+  title: string
+  text: string
+  when: string
+}
+
+/** Exemplos genéricos do que o painel mostra; nenhum dado real. */
+const FEED: FeedItem[] = [
+  { id: 1, icon: MessageCircle, tone: 'green', title: 'Novo lead no WhatsApp', text: '“Oi! Quero saber os valores…”', when: 'agora' },
+  { id: 2, icon: Zap, tone: 'blue', title: 'Resposta em 2 min', text: 'Atendimento dentro da meta', when: '1 min' },
+  { id: 3, icon: Flame, tone: 'hot', title: 'Lead quente', text: 'Pediu orçamento e horário', when: '3 min' },
+  { id: 4, icon: CalendarCheck, tone: 'violet', title: 'Agendamento confirmado', text: 'Amanhã, 14h30', when: '6 min' },
+  { id: 5, icon: TrendingUp, tone: 'blue', title: 'Resumo do dia', text: '48 conversas · 12 leads novos', when: '9 min' },
+]
+
+// Três visíveis + um saindo (fica transparente antes de sumir).
+const VISIBLE = 4
+const STEP_MS = 3200
+
+function useReducedMotion() {
+  const [reduced, setReduced] = useState(() => window.matchMedia('(prefers-reduced-motion: reduce)').matches)
+  useEffect(() => {
+    const mq = window.matchMedia('(prefers-reduced-motion: reduce)')
+    const handler = (e: MediaQueryListEvent) => setReduced(e.matches)
+    mq.addEventListener('change', handler)
+    return () => mq.removeEventListener('change', handler)
+  }, [])
+  return reduced
+}
+
+/** Três cartões que se revezam como um feed ao vivo: o novo entra por cima, o mais antigo sai por baixo. */
+function LiveFeed() {
+  const reduced = useReducedMotion()
+  const [head, setHead] = useState(0)
+
+  useEffect(() => {
+    if (reduced) return
+    const tick = () => {
+      if (document.visibilityState === 'visible') setHead((h) => (h + 1) % FEED.length)
+    }
+    const id = window.setInterval(tick, STEP_MS)
+    return () => window.clearInterval(id)
+  }, [reduced])
+
+  const items = Array.from({ length: VISIBLE }, (_, i) => FEED[(head - i + FEED.length * 2) % FEED.length])
+
   return (
-    <div className="auth-page">
+    <ul className="auth-feed" aria-hidden>
+      {items.map((item, i) => {
+        const Icon = item.icon
+        return (
+          <li key={item.id} className={`auth-feed-item tone-${item.tone}${i === 0 ? ' is-new' : ''}`} data-i={i} style={{ '--i': i } as CSSProperties}>
+            <span className="auth-feed-icon">
+              <Icon size={16} aria-hidden />
+            </span>
+            <span className="auth-feed-body">
+              <span className="auth-feed-title">{item.title}</span>
+              <span className="auth-feed-text">{item.text}</span>
+            </span>
+            <span className="auth-feed-when">{item.when}</span>
+          </li>
+        )
+      })}
+    </ul>
+  )
+}
+
+export function AuthLayout({ children }: { children: ReactNode }) {
+  const pageRef = useRef<HTMLDivElement>(null)
+
+  // Paralaxe leve das luzes do fundo, só com mouse (no toque não há "mover sem clicar").
+  const onPointerMove = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (e.pointerType !== 'mouse') return
+    const el = pageRef.current
+    if (!el) return
+    const x = e.clientX / window.innerWidth - 0.5
+    const y = e.clientY / window.innerHeight - 0.5
+    el.style.setProperty('--mx', x.toFixed(3))
+    el.style.setProperty('--my', y.toFixed(3))
+  }
+
+  return (
+    <div className="auth-page" ref={pageRef} onPointerMove={onPointerMove}>
+      <div className="auth-bg" aria-hidden>
+        <span className="auth-orb orb-1" />
+        <span className="auth-orb orb-2" />
+        <span className="auth-orb orb-3" />
+        <span className="auth-grid" />
+      </div>
+
       <div className="auth-theme">
         <ThemeToggle />
       </div>
-      <main className="auth-card card">
-        <BrandLogo className="auth-brand" />
+
+      <section className="auth-hero">
+        <div className="auth-brand">
+          <span className="auth-mark">
+            <SolidMark size={26} />
+          </span>
+          <span className="auth-wordmark">
+            <span className="brand-name">Solid</span>
+            <span className="brand-tagline">Marketing Digital</span>
+          </span>
+        </div>
+        <p className="auth-headline">
+          Seus leads do WhatsApp, <em>em tempo real</em>.
+        </p>
+        <p className="auth-sub">Acompanhe conversas, tempo de resposta e oportunidades num só painel.</p>
+        <LiveFeed />
+      </section>
+
+      <main className="auth-card">
+        <span className="auth-card-handle" aria-hidden />
         {children}
+        <p className="auth-foot">
+          <ShieldCheck size={13} aria-hidden /> Acesso restrito a contas criadas pela Solid.
+        </p>
       </main>
     </div>
   )
